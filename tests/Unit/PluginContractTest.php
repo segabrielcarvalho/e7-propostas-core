@@ -90,6 +90,9 @@ final class PluginContractTest extends TestCase
         self::assertStringNotContainsString('e7_proposal_sessions', $migration);
         self::assertStringNotContainsString('e7_proposal_otps', $migration);
         self::assertStringNotContainsString('e7_proposal_acceptances', $migration);
+        $bootstrap = $this->read('deploy/import-proposals.php');
+        self::assertStringContainsString('Installer::ensureSchema()', $bootstrap);
+        self::assertStringContainsString('new ProposalMigrationCommand', $bootstrap);
     }
 
     public function test_exposes_only_versioned_public_workflow_routes(): void

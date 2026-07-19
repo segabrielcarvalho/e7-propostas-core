@@ -93,6 +93,10 @@ final class PluginContractTest extends TestCase
         $bootstrap = $this->read('deploy/import-proposals.php');
         self::assertStringContainsString('Installer::ensureSchema()', $bootstrap);
         self::assertStringContainsString('new ProposalMigrationCommand', $bootstrap);
+        self::assertStringContainsString('E7_PROPOSALS_IMPORT_EXPECTED_HOST', $bootstrap);
+        $cleanup = $this->read('deploy/cleanup-misrouted-proposals.php');
+        self::assertStringContainsString('_e7_migration_source_id', $cleanup);
+        self::assertStringContainsString('wp_delete_post', $cleanup);
     }
 
     public function test_exposes_only_versioned_public_workflow_routes(): void

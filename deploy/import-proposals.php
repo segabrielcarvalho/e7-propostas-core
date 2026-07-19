@@ -18,8 +18,13 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
 
 $file = getenv('E7_PROPOSALS_IMPORT_FILE');
 $password = getenv('E7_PROPOSALS_IMPORT_PASSWORD');
-if (! is_string($file) || $file === '' || ! is_string($password) || $password === '') {
+$expectedHost = getenv('E7_PROPOSALS_IMPORT_EXPECTED_HOST');
+$currentHost = wp_parse_url(home_url('/'), PHP_URL_HOST);
+if (! is_string($file) || $file === '' || ! is_string($password) || $password === '' || ! is_string($expectedHost) || $expectedHost === '') {
     WP_CLI::error('Proposal import environment is incomplete.');
+}
+if (! is_string($currentHost) || ! hash_equals(strtolower($expectedHost), strtolower($currentHost))) {
+    WP_CLI::error('Proposal import refused: unexpected WordPress site.');
 }
 
 Installer::ensureSchema();

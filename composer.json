@@ -1,0 +1,28 @@
+{
+  "name": "e7-company/e7-propostas-core",
+  "description": "Nucleo seguro de propostas e aceite eletronico da E7 Company.",
+  "type": "wordpress-plugin",
+  "require": {
+    "php": ">=8.2",
+    "aws/aws-sdk-php": "^3.337"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "E7Propostas\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "E7Propostas\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}

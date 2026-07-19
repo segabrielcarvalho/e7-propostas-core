@@ -1,0 +1,47 @@
+Options -Indexes
+
+<IfModule mod_headers.c>
+    Header always unset X-Powered-By
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=()"
+</IfModule>
+
+<IfModule mod_php.c>
+    php_flag display_errors Off
+    php_flag display_startup_errors Off
+    php_flag expose_php Off
+</IfModule>
+
+# Sensitive root files include wp-config.php and local-xdebuginfo.php.
+<FilesMatch "(?i)^(?:wp-config\.php|\.env(?:\..*)?|composer\.(?:json|lock)|package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|readme\.html|license\.txt|local-xdebuginfo\.php|.*\.(?:log|sql|bak|backup|old|orig|swp|dist))$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteCond %{HTTP_HOST} ^proposta\.e7company\.com$ [NC]
+RewriteRule ^ https://proposal.e7company.com%{REQUEST_URI} [R=301,L,NE]
+RewriteRule ^xmlrpc\.php$ - [F,L,NC]
+RewriteRule ^wp-content/(?:uploads|blogs\.dir)/.*\.(?:php[0-9]?|phtml|phar)(?:\.|$) - [F,L,NC]
+RewriteRule ^wp-admin/includes/ - [F,L]
+RewriteRule !^wp-includes/ - [S=3]
+RewriteRule ^wp-includes/[^/]+\.php$ - [F,L]
+RewriteRule ^wp-includes/js/tinymce/langs/.+\.php - [F,L]
+RewriteRule ^wp-includes/theme-compat/ - [F,L]
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteRule ^wp-admin$ wp-admin/ [R=301,L]
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+RewriteRule ^(wp-(content|admin|includes).*) $1 [L]
+RewriteRule ^(.*\.php)$ $1 [L]
+RewriteRule . index.php [L]
+</IfModule>

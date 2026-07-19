@@ -94,6 +94,7 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString('Installer::ensureSchema()', $bootstrap);
         self::assertStringContainsString('new ProposalMigrationCommand', $bootstrap);
         self::assertStringContainsString('E7_PROPOSALS_IMPORT_EXPECTED_HOST', $bootstrap);
+        self::assertStringContainsString('switch_to_blog', $bootstrap);
         $cleanup = $this->read('deploy/cleanup-misrouted-proposals.php');
         self::assertStringContainsString('_e7_migration_source_id', $cleanup);
         self::assertStringContainsString('wp_delete_post', $cleanup);

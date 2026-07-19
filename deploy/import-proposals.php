@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 use E7Propostas\Domain\AuditChain;
 use E7Propostas\Domain\PasswordService;
 use E7Propostas\Domain\ShareCodeService;

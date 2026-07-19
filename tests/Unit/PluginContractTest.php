@@ -62,6 +62,7 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString("unset(\$headers['X-Pingback'])", $hardening);
         self::assertStringContainsString('FilesMatch', $uploads);
         self::assertMatchesRegularExpression('/php\\[0-9\\]/', $uploads);
+        self::assertStringContainsString('e7-proposals-import', $uploads);
         self::assertStringContainsString('local-xdebuginfo.php', $root);
         self::assertStringContainsString('wp-config.php', $root);
     }

@@ -24,14 +24,20 @@ if (! is_string($file) || $file === '' || ! is_string($password) || $password ==
 }
 $currentHost = wp_parse_url(home_url('/'), PHP_URL_HOST);
 if ((! is_string($currentHost) || ! hash_equals(strtolower($expectedHost), strtolower($currentHost))) && is_multisite()) {
-    $sites = get_sites(['domain' => strtolower($expectedHost), 'number' => 1]);
-    if (isset($sites[0]) && $sites[0] instanceof WP_Site) {
-        switch_to_blog((int) $sites[0]->blog_id);
-        $currentHost = wp_parse_url(home_url('/'), PHP_URL_HOST);
+    foreach (get_sites(['number' => 0]) as $site) {
+        if (! $site instanceof WP_Site) {
+            continue;
+        }
+        $candidateHost = wp_parse_url(get_home_url((int) $site->blog_id, '/'), PHP_URL_HOST);
+        if (is_string($candidateHost) && hash_equals(strtolower($expectedHost), strtolower($candidateHost))) {
+            switch_to_blog((int) $site->blog_id);
+            $currentHost = wp_parse_url(home_url('/'), PHP_URL_HOST);
+            break;
+        }
     }
 }
 if (! is_string($currentHost) || ! hash_equals(strtolower($expectedHost), strtolower($currentHost))) {
-    WP_CLI::error('Proposal import refused: unexpected WordPress site.');
+    WP_CLI::error(sprintf('Proposal import refused: expected %s, got %s.', $expectedHost, is_string($currentHost) ? $currentHost : 'unknown'));
 }
 
 Installer::ensureSchema();

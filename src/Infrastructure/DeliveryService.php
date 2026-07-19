@@ -40,8 +40,15 @@ final class DeliveryService
             if ($destination === '') {
                 throw new \RuntimeException('Signer phone is required for SMS OTP.');
             }
+            $senderId = getenv('E7_SNS_SENDER_ID');
+            if (! is_string($senderId) || preg_match('/^[A-Za-z0-9]{3,11}$/', $senderId) !== 1) {
+                throw new \RuntimeException('SNS sender ID is not configured.');
+            }
             $client = new SnsClient(['version' => 'latest', 'region' => $region]);
-            $result = $client->publish(['PhoneNumber' => $destination, 'Message' => "E7: $code", 'MessageAttributes' => ['AWS.SNS.SMS.SMSType' => ['DataType' => 'String', 'StringValue' => 'Transactional']]]);
+            $result = $client->publish(['PhoneNumber' => $destination, 'Message' => "E7: $code", 'MessageAttributes' => [
+                'AWS.SNS.SMS.SMSType' => ['DataType' => 'String', 'StringValue' => 'Transactional'],
+                'AWS.SNS.SMS.SenderID' => ['DataType' => 'String', 'StringValue' => $senderId],
+            ]]);
             $ids[] = (string) ($result->get('MessageId') ?? 'sns');
         }
         return ['id' => implode(',', $ids)];

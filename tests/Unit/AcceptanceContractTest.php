@@ -147,6 +147,15 @@ final class AcceptanceContractTest extends TestCase
         self::assertStringContainsString('destination varchar(254)', $installer);
     }
 
+    public function test_sms_uses_an_application_specific_sender_id(): void
+    {
+        $delivery = file_get_contents(dirname(__DIR__, 2) . '/src/Infrastructure/DeliveryService.php');
+
+        self::assertIsString($delivery);
+        self::assertStringContainsString("getenv('E7_SNS_SENDER_ID')", $delivery);
+        self::assertStringContainsString("'AWS.SNS.SMS.SenderID'", $delivery);
+    }
+
     public function test_otp_send_limits_survive_session_recreation_and_attempts_are_serialized(): void
     {
         $controller = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/RestController.php');

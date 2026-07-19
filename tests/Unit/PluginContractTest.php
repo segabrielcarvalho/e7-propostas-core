@@ -75,6 +75,22 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString('flush_rewrite_rules(false)', $installer);
     }
 
+    public function test_cli_migration_clones_only_proposal_content_and_safe_settings(): void
+    {
+        $plugin = $this->read('src/WordPress/Plugin.php');
+        $migration = $this->read('src/WordPress/ProposalMigrationCommand.php');
+
+        self::assertStringContainsString("e7-propostas export", $plugin);
+        self::assertStringContainsString("e7-propostas import", $plugin);
+        self::assertStringContainsString('_e7_migration_source_id', $migration);
+        self::assertStringContainsString('wp_insert_post', $migration);
+        self::assertStringContainsString('saveSettings', $migration);
+        self::assertStringContainsString('passwords->hash', $migration);
+        self::assertStringNotContainsString('e7_proposal_sessions', $migration);
+        self::assertStringNotContainsString('e7_proposal_otps', $migration);
+        self::assertStringNotContainsString('e7_proposal_acceptances', $migration);
+    }
+
     public function test_exposes_only_versioned_public_workflow_routes(): void
     {
         $rest = $this->read('src/WordPress/RestController.php');

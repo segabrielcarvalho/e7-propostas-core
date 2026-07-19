@@ -42,14 +42,16 @@ final class Plugin
             $tokens = new TokenService(wp_salt('secure_auth'));
             $repository = new ProposalRepository($crypto, $tokens, new SnapshotHasher(), new AuditChain(), new ShareCodeService());
             $artifactVerifier = new ArtifactVerifier();
-            $admin = new AdminMetaBox($repository, new PasswordService());
+            $passwords = new PasswordService();
+            $admin = new AdminMetaBox($repository, $passwords);
             $adminList = new ProposalAdminList($repository);
             $adminGuard = new ProposalAdminGuard($repository);
             $duplicator = new ProposalDuplicator($repository);
             $publisher = new SnapshotPublisher($repository);
             $routes = new PublicRoutes($repository, $artifactVerifier, new ArtifactDownload());
-            $rest = new RestController($repository, new PasswordService(), new OtpService(wp_salt('logged_in')), new DeliveryService(), $artifactVerifier);
+            $rest = new RestController($repository, $passwords, new OtpService(wp_salt('logged_in')), new DeliveryService(), $artifactVerifier);
             $artifacts = new ArtifactProcessor($repository);
+            $migration = new ProposalMigrationCommand($repository, $passwords);
 
             add_action('init', [ProposalPostType::class, 'register']);
             add_action('init', [PublicRoutes::class, 'registerRewrites']);
@@ -88,6 +90,8 @@ final class Plugin
                     $processed = $artifacts->runDue();
                     \WP_CLI::success(sprintf('%d job(s) processed.', $processed));
                 });
+                \WP_CLI::add_command('e7-propostas export', [$migration, 'export']);
+                \WP_CLI::add_command('e7-propostas import', [$migration, 'import']);
             }
         });
     }

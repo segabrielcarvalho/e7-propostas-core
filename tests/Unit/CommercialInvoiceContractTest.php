@@ -53,11 +53,11 @@ final class CommercialInvoiceContractTest extends TestCase
         self::assertStringContainsString('e7_proposal[invoice_items]', $admin);
     }
 
-    public function test_schema_1_5_adds_invoice_foundation_without_a_second_job_table(): void
+    public function test_schema_1_6_completes_invoice_lifecycle_without_a_second_job_table(): void
     {
         $installer = $this->read('src/WordPress/Installer.php');
 
-        self::assertStringContainsString("SCHEMA_VERSION = '1.5.2'", $installer);
+        self::assertStringContainsString("SCHEMA_VERSION = '1.6.1'", $installer);
         self::assertStringContainsString('business_payload longtext NULL', $installer);
         self::assertStringContainsString('e7_proposal_invoices', $installer);
         self::assertStringContainsString('e7_proposal_invoice_sequences', $installer);
@@ -65,6 +65,7 @@ final class CommercialInvoiceContractTest extends TestCase
         self::assertStringContainsString('KEY acceptance_id (acceptance_id)', $installer);
         self::assertStringNotContainsString('UNIQUE KEY acceptance_id', $installer);
         self::assertStringContainsString('UNIQUE KEY invoice_number', $installer);
+        self::assertStringContainsString('UNIQUE KEY public_id', $installer);
         self::assertStringContainsString('UNIQUE KEY replacement_for_id', $installer);
         self::assertStringContainsString('UNIQUE KEY sequence_scope_year', $installer);
         self::assertStringContainsString('current_value bigint unsigned', $installer);

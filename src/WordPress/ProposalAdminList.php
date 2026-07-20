@@ -7,8 +7,9 @@ namespace E7Propostas\WordPress;
 final class ProposalAdminList
 {
     private const COLUMN = 'e7_share_link';
+    private const INVOICE_COLUMN = 'e7_invoice_status';
 
-    public function __construct(private readonly ProposalRepository $repository)
+    public function __construct(private readonly ProposalRepository $repository, private readonly InvoiceRepository $invoices)
     {
     }
 
@@ -16,6 +17,7 @@ final class ProposalAdminList
     {
         add_filter('manage_e7_proposal_posts_columns', [$this, 'columns']);
         add_action('manage_e7_proposal_posts_custom_column', [$this, 'render'], 10, 2);
+        add_filter('post_row_actions', [$this, 'rowActions'], 10, 2);
         add_action('admin_enqueue_scripts', [$this, 'enqueueAssets']);
     }
 
@@ -27,6 +29,7 @@ final class ProposalAdminList
         foreach ($columns as $key => $label) {
             if ($key === 'date') {
                 $result[self::COLUMN] = __('Link compartilhável', 'e7-propostas');
+                $result[self::INVOICE_COLUMN] = __('Invoice', 'e7-propostas');
             }
 
             $result[$key] = $label;
@@ -35,12 +38,20 @@ final class ProposalAdminList
         if (! isset($result[self::COLUMN])) {
             $result[self::COLUMN] = __('Link compartilhável', 'e7-propostas');
         }
+        if (! isset($result[self::INVOICE_COLUMN])) {
+            $result[self::INVOICE_COLUMN] = __('Invoice', 'e7-propostas');
+        }
 
         return $result;
     }
 
     public function render(string $column, int $postId): void
     {
+        if ($column === self::INVOICE_COLUMN) {
+            $invoice = $this->invoices->findByPost($postId);
+            echo is_array($invoice) ? esc_html((string) $invoice['status']) : '<span aria-hidden="true">—</span>';
+            return;
+        }
         if ($column !== self::COLUMN) {
             return;
         }
@@ -58,6 +69,27 @@ final class ProposalAdminList
         echo '<a href="' . esc_url($url) . '" target="_blank" rel="noopener noreferrer" title="' . esc_attr($url) . '">' . esc_html($url) . '</a>';
         echo '<button type="button" class="button button-small" data-e7-copy-link data-url="' . esc_attr($url) . '">' . esc_html__('Copiar link', 'e7-propostas') . '</button>';
         echo '</div>';
+    }
+
+    /** @param array<string, string> $actions @return array<string, string> */
+    public function rowActions(array $actions, \WP_Post $post): array
+    {
+        if ($post->post_type !== 'e7_proposal' || ! current_user_can('e7_manage_proposal_invoices')) {
+            return $actions;
+        }
+        $acceptanceId = $this->invoices->acceptanceIdForPost($post->ID);
+        if ($acceptanceId === null) {
+            return $actions;
+        }
+        $invoice = $this->invoices->findByPost($post->ID);
+        $args = ['post_type' => 'e7_proposal', 'page' => 'e7-commercial-invoice'];
+        if (is_array($invoice)) {
+            $args['invoice_id'] = (int) $invoice['id'];
+        } else {
+            $args['acceptance_id'] = $acceptanceId;
+        }
+        $actions['e7_prepare_invoice'] = '<a href="' . esc_url(add_query_arg($args, admin_url('edit.php'))) . '">' . esc_html__('Prepare invoice', 'e7-propostas') . '</a>';
+        return $actions;
     }
 
     public function enqueueAssets(string $hookSuffix): void

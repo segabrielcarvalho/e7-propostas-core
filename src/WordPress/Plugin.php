@@ -42,11 +42,14 @@ final class Plugin
             $crypto = new Crypto($secret);
             $tokens = new TokenService(wp_salt('secure_auth'));
             $repository = new ProposalRepository($crypto, $tokens, new SnapshotHasher(), new AuditChain(), new ShareCodeService());
+            $invoiceRepository = new InvoiceRepository($crypto, $repository);
+            $invoiceService = new InvoiceService($invoiceRepository);
             $artifactVerifier = new ArtifactVerifier();
             $features = new FeatureFlags();
             $passwords = new PasswordService();
             $admin = new AdminMetaBox($repository, $passwords);
-            $adminList = new ProposalAdminList($repository);
+            $adminList = new ProposalAdminList($repository, $invoiceRepository);
+            $invoiceAdmin = new InvoiceAdmin($invoiceRepository, $invoiceService);
             $adminGuard = new ProposalAdminGuard($repository);
             $duplicator = new ProposalDuplicator($repository);
             $publisher = new SnapshotPublisher($repository);
@@ -75,6 +78,7 @@ final class Plugin
             add_action('save_post_e7_proposal', [$admin, 'save'], 20, 2);
             add_action('save_post_e7_proposal', [$publisher, 'publish'], 50, 2);
             $adminList->register();
+            $invoiceAdmin->register();
             $adminGuard->register();
             $duplicator->register();
             add_action('admin_notices', [$this, 'adminNotice']);

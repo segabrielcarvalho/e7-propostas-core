@@ -56,6 +56,6 @@ final class ProposalPostType
     /** @return list<string> */
     public static function capabilities(): array
     {
-        return ['e7_edit_proposal', 'e7_read_proposal', 'e7_delete_proposal', 'e7_edit_proposals', 'e7_edit_others_proposals', 'e7_publish_proposals', 'e7_read_private_proposals', 'e7_delete_proposals'];
+        return ['e7_edit_proposal', 'e7_read_proposal', 'e7_delete_proposal', 'e7_edit_proposals', 'e7_edit_others_proposals', 'e7_publish_proposals', 'e7_read_private_proposals', 'e7_delete_proposals', 'e7_manage_proposal_invoices'];
     }
 }

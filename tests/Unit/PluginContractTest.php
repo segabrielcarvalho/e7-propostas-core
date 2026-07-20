@@ -42,7 +42,7 @@ final class PluginContractTest extends TestCase
         foreach (['e7_proposal_settings', 'e7_proposal_versions', 'e7_proposal_sessions', 'e7_proposal_otps', 'e7_proposal_acceptances', 'e7_proposal_audit_events', 'e7_proposal_jobs', 'e7_proposal_rate_limits'] as $table) {
             self::assertStringContainsString($table, $installer);
         }
-        self::assertStringContainsString("SCHEMA_VERSION = '1.5.2'", $installer);
+        self::assertStringContainsString("SCHEMA_VERSION = '1.6.1'", $installer);
         self::assertStringContainsString('share_code char(8) NULL', $installer);
         self::assertStringContainsString('UNIQUE KEY share_code (share_code)', $installer);
         self::assertStringContainsString("signer_email varchar(254) NOT NULL DEFAULT ''", $installer);
@@ -174,7 +174,7 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString("home_url('/p/'", $list);
         self::assertStringNotContainsString("['public_token']", $list);
         self::assertStringContainsString('Copiar link', $list);
-        self::assertStringContainsString('new ProposalAdminList($repository)', $plugin);
+        self::assertStringContainsString('new ProposalAdminList($repository, $invoiceRepository)', $plugin);
     }
 
     public function test_password_access_resolves_the_stable_share_code(): void

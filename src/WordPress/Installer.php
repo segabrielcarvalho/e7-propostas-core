@@ -11,7 +11,7 @@ use E7Propostas\Infrastructure\Crypto;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.7.0';
+    public const SCHEMA_VERSION = '1.7.1';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -24,6 +24,7 @@ final class Installer
         self::migrateInvoiceAcceptanceIndex();
         self::migrateAcceptanceIdempotencyIndex();
         self::migrateInvoiceRecords();
+        self::migrateInvoiceJobKeys();
         self::assertSchemaInstalled();
         update_option('e7_propostas_core_enabled', '1', false);
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
@@ -49,6 +50,7 @@ final class Installer
         self::migrateInvoiceAcceptanceIndex();
         self::migrateAcceptanceIdempotencyIndex();
         self::migrateInvoiceRecords();
+        self::migrateInvoiceJobKeys();
         self::assertSchemaInstalled();
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
         self::scheduleRewriteFlush();
@@ -406,6 +408,34 @@ final class Installer
             $now,
         )) === false) {
             throw new \RuntimeException('Invoice sequence migration failed.');
+        }
+    }
+
+    private static function migrateInvoiceJobKeys(): void
+    {
+        global $wpdb;
+        $jobs = $wpdb->prefix . 'e7_proposal_jobs';
+        $invoices = $wpdb->prefix . 'e7_proposal_invoices';
+        $rows = $wpdb->get_results("SELECT id, payload FROM $jobs WHERE job_type='finalize_invoice' AND idempotency_key IS NULL ORDER BY id ASC", ARRAY_A);
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            $payload = json_decode((string) $row['payload'], true);
+            $publicId = is_array($payload) ? (string) ($payload['public_id'] ?? '') : '';
+            if (! preg_match('/^[a-f0-9]{32}$/', $publicId) && is_array($payload) && isset($payload['invoice_id'])) {
+                $publicId = (string) $wpdb->get_var($wpdb->prepare("SELECT public_id FROM $invoices WHERE id=%d", (int) $payload['invoice_id']));
+            }
+            if (! preg_match('/^[a-f0-9]{32}$/', $publicId)) {
+                $result = $wpdb->update($jobs, ['status' => 'failed', 'last_error' => 'Invoice job payload could not be identified during migration.'], ['id' => (int) $row['id']]);
+            } else {
+                $key = hash('sha256', 'finalize_invoice:' . $publicId);
+                $existing = $wpdb->get_var($wpdb->prepare("SELECT id FROM $jobs WHERE idempotency_key=%s LIMIT 1", $key));
+                $data = is_numeric($existing)
+                    ? ['status' => 'superseded', 'last_error' => 'Duplicate invoice job superseded during idempotency migration.']
+                    : ['idempotency_key' => $key];
+                $result = $wpdb->update($jobs, $data, ['id' => (int) $row['id']]);
+            }
+            if ($result === false) {
+                throw new \RuntimeException('Invoice job idempotency migration failed.');
+            }
         }
     }
 

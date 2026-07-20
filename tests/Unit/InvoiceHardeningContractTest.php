@@ -67,6 +67,15 @@ final class InvoiceHardeningContractTest extends TestCase
         self::assertStringContainsString('=== false', $installer);
     }
 
+    public function test_migration_backfills_invoice_job_keys_and_supersedes_legacy_duplicates(): void
+    {
+        $installer = $this->read('src/WordPress/Installer.php');
+        self::assertStringContainsString('migrateInvoiceJobKeys', $installer);
+        self::assertStringContainsString("'superseded'", $installer);
+        self::assertStringContainsString('Invoice job idempotency migration failed.', $installer);
+        self::assertStringContainsString("'finalize_invoice:'", $installer);
+    }
+
     public function test_admin_renders_error_notice_and_explicit_legacy_backfill(): void
     {
         $admin = $this->read('src/WordPress/InvoiceAdmin.php');

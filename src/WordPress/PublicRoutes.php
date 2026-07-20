@@ -6,13 +6,14 @@ namespace E7Propostas\WordPress;
 
 use E7Propostas\Infrastructure\ArtifactVerifier;
 use E7Propostas\Infrastructure\ArtifactDownload;
+use E7Propostas\Infrastructure\FeatureFlags;
 
 final class PublicRoutes
 {
     /** @var array<string, mixed> */
     private static array $view = [];
 
-    public function __construct(private readonly ProposalRepository $repository, private readonly ArtifactVerifier $artifactVerifier, private readonly ArtifactDownload $artifactDownload)
+    public function __construct(private readonly ProposalRepository $repository, private readonly ArtifactVerifier $artifactVerifier, private readonly ArtifactDownload $artifactDownload, private readonly FeatureFlags $features)
     {
     }
 
@@ -81,6 +82,8 @@ final class PublicRoutes
             'csrf' => $authorized ? RestController::csrfFor($sessionRaw) : '',
             'rest_url' => esc_url_raw(rest_url('e7-propostas/v1')),
             'acceptance' => $authorized ? $acceptance : null,
+            'otp_enabled' => $this->features->otpEnabled(),
+            'irish_invoice_flow' => AcceptancePolicy::isIrishInvoiceFlow((string) ($settings['locale'] ?? ''), (string) ($settings['currency'] ?? '')),
         ];
         $this->render('proposal.php');
     }

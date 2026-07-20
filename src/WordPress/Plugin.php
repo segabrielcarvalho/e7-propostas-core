@@ -50,7 +50,7 @@ final class Plugin
             $adminGuard = new ProposalAdminGuard($repository);
             $duplicator = new ProposalDuplicator($repository);
             $publisher = new SnapshotPublisher($repository);
-            $routes = new PublicRoutes($repository, $artifactVerifier, new ArtifactDownload());
+            $routes = new PublicRoutes($repository, $artifactVerifier, new ArtifactDownload(), $features);
             $rest = new RestController($repository, $passwords, new OtpService(wp_salt('logged_in')), new DeliveryService(), $artifactVerifier, $features);
             $artifacts = new ArtifactProcessor($repository, $features);
             $migration = new ProposalMigrationCommand($repository, $passwords);

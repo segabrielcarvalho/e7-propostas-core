@@ -157,12 +157,13 @@ final class AcceptanceContractTest extends TestCase
         self::assertStringContainsString('destination varchar(254)', $installer);
     }
 
-    public function test_non_irish_acceptance_requires_email_and_international_phone_while_irish_uses_the_business_profile(): void
+    public function test_non_irish_phone_compatibility_is_delegated_to_the_otp_policy(): void
     {
         $controller = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/RestController.php');
 
         self::assertIsString($controller);
-        self::assertStringContainsString("\$phone = OtpDestination::from('sms', (string) \$request->get_param('phone'))->value", $controller);
+        self::assertStringContainsString('AcceptancePolicy::phoneRequiredAtSubmission', $controller);
+        self::assertStringContainsString("OtpDestination::from('sms', \$phoneRaw)->value", $controller);
         self::assertStringContainsString("BusinessProfile::normalize(\$request->get_param('business_profile'))", $controller);
         self::assertStringContainsString("\$channel === 'email'", $controller);
         self::assertStringContainsString("\$channel === 'sms'", $controller);

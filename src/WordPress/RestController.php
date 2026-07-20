@@ -193,7 +193,7 @@ final class RestController
         $settings = $this->repository->getSettings((int) $version['post_id']);
         $businessProfile = null;
         try {
-            if (($settings['locale'] ?? '') === 'en_IE' && ($settings['currency'] ?? '') === 'EUR') {
+            if (AcceptancePolicy::isIrishInvoiceFlow((string) ($settings['locale'] ?? ''), (string) ($settings['currency'] ?? ''))) {
                 $businessProfile = BusinessProfile::normalize($request->get_param('business_profile'));
                 $responsible = $businessProfile['responsible'];
                 $name = (string) $responsible['name'];
@@ -206,7 +206,10 @@ final class RestController
                 $role = sanitize_text_field((string) $request->get_param('role'));
                 $company = sanitize_text_field((string) $request->get_param('company'));
                 $email = OtpDestination::from('email', (string) $request->get_param('email'))->value;
-                $phone = OtpDestination::from('sms', (string) $request->get_param('phone'))->value;
+                $phoneRaw = trim((string) $request->get_param('phone'));
+                $phone = $phoneRaw === '' && ! AcceptancePolicy::phoneRequiredAtSubmission($this->features->otpEnabled())
+                    ? ''
+                    : OtpDestination::from('sms', $phoneRaw)->value;
                 if ($name === '') {
                     throw new \InvalidArgumentException('Signer name is required.');
                 }
@@ -330,6 +333,9 @@ final class RestController
         $configuredEmail = trim((string) ($settings['client_email'] ?? ''));
         $configuredPhone = trim((string) ($settings['client_phone'] ?? ''));
         $channel = (string) ($otp['channel'] ?? '');
+        if (AcceptancePolicy::phoneRequiredForVerifiedChannel($this->features->otpEnabled(), $channel) && $phone === '') {
+            throw new \InvalidArgumentException('Signer phone is required for this authentication method.');
+        }
         if (($channel === 'email' && $configuredEmail !== '' && strcasecmp($configuredEmail, $email) !== 0)
             || ($channel === 'sms' && $configuredPhone !== '' && ! hash_equals($configuredPhone, $phone))) {
             throw new \InvalidArgumentException('Signer contact does not match proposal settings.');

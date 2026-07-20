@@ -29,6 +29,15 @@ final class CommercialInvoiceContractTest extends TestCase
         self::assertStringContainsString("appendAudit(\$versionId, 'otp.verified'", $repository);
     }
 
+    public function test_public_view_exposes_backend_workflow_decisions(): void
+    {
+        $routes = $this->read('src/WordPress/PublicRoutes.php');
+
+        self::assertStringContainsString("'otp_enabled' =>", $routes);
+        self::assertStringContainsString("'irish_invoice_flow' =>", $routes);
+        self::assertStringContainsString('AcceptancePolicy::isIrishInvoiceFlow', $routes);
+    }
+
     public function test_business_profile_and_invoice_items_are_immutable_acceptance_inputs(): void
     {
         $controller = $this->read('src/WordPress/RestController.php');
@@ -48,11 +57,13 @@ final class CommercialInvoiceContractTest extends TestCase
     {
         $installer = $this->read('src/WordPress/Installer.php');
 
-        self::assertStringContainsString("SCHEMA_VERSION = '1.5.0'", $installer);
+        self::assertStringContainsString("SCHEMA_VERSION = '1.5.1'", $installer);
         self::assertStringContainsString('business_payload longtext NULL', $installer);
         self::assertStringContainsString('e7_proposal_invoices', $installer);
         self::assertStringContainsString('e7_proposal_invoice_sequences', $installer);
         self::assertStringContainsString('replacement_for_id bigint unsigned NULL', $installer);
+        self::assertStringContainsString('KEY acceptance_id (acceptance_id)', $installer);
+        self::assertStringNotContainsString('UNIQUE KEY acceptance_id', $installer);
         self::assertStringContainsString('UNIQUE KEY invoice_number', $installer);
         self::assertStringContainsString('UNIQUE KEY replacement_for_id', $installer);
         self::assertStringContainsString('UNIQUE KEY sequence_scope_year', $installer);
@@ -74,6 +85,27 @@ final class CommercialInvoiceContractTest extends TestCase
         );
     }
 
+    public function test_activation_runs_index_migration_and_legacy_drop_requires_composite_index(): void
+    {
+        $installer = $this->read('src/WordPress/Installer.php');
+        $activate = substr($installer, (int) strpos($installer, 'public static function activate'), 800);
+
+        self::assertStringContainsString('self::migrateAcceptanceIdempotencyIndex()', $activate);
+        self::assertStringContainsString('self::migrateInvoiceAcceptanceIndex()', $activate);
+        self::assertStringContainsString('SchemaRequirements::hasIndex', $installer);
+    }
+
+    public function test_acceptance_audits_canonical_business_and_invoice_context_before_insert(): void
+    {
+        $repository = $this->read('src/WordPress/ProposalRepository.php');
+        $accept = substr($repository, (int) strpos($repository, 'public function accept'), 7000);
+
+        foreach (['business_profile_hash', 'invoice_total_minor', "'version' =>"] as $field) {
+            self::assertStringContainsString($field, $accept);
+        }
+        self::assertLessThan(strpos($accept, '$wpdb->insert($acceptances'), strpos($accept, "'proposal.accepted'"));
+    }
+
     public function test_final_email_flag_skips_only_ses_after_persisting_the_artifact(): void
     {
         $processor = $this->read('src/Infrastructure/ArtifactProcessor.php');
@@ -85,6 +117,13 @@ final class CommercialInvoiceContractTest extends TestCase
         self::assertLessThan($flag, $persistence);
         self::assertStringContainsString("'final_email.skipped'", $processor);
         self::assertStringContainsString("'reason' => 'feature_disabled'", $processor);
+        self::assertStringContainsString('ArtifactState::shouldGenerate', $processor);
+        self::assertStringContainsString("'final_email.sent'", $processor);
+        $finalized = strpos($processor, "appendAudit((int) \$job['version_id'], 'artifact.finalized'");
+        $email = strpos($processor, '$this->sendFinalEmail($acceptance, $pdf, $region)');
+        self::assertNotFalse($finalized);
+        self::assertNotFalse($email);
+        self::assertLessThan($email, $finalized);
     }
 
     public function test_duplicate_and_migration_copy_only_generic_invoice_items(): void

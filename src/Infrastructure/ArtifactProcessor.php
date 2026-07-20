@@ -56,54 +56,105 @@ final class ArtifactProcessor
             throw new \RuntimeException('Acceptance no longer exists.');
         }
         if (wp_get_environment_type() === 'local') {
-            $this->writeLocalEvidence($acceptance);
+            if (! ArtifactState::hasEvent($acceptance['audit_events'] ?? [], 'artifact.local_evidence_created')) {
+                $this->writeLocalEvidence($acceptance);
+            }
             return 'local-evidence';
         }
-        $renderer = getenv('E7_PROPOSTAS_RENDERER_URL');
         $bucket = getenv('E7_PROPOSTAS_S3_BUCKET');
-        $kmsKey = getenv('E7_PROPOSTAS_KMS_SIGNING_KEY_ID');
         $region = getenv('E7_AWS_REGION') ?: getenv('AWS_REGION');
-        if (! is_string($renderer) || $renderer === '' || ! is_string($bucket) || $bucket === '' || ! is_string($kmsKey) || $kmsKey === '' || ! is_string($region) || $region === '') {
-            throw new \RuntimeException('Artifact infrastructure is not configured.');
+        $version = $acceptance['version'];
+        $pdf = null;
+
+        if (ArtifactState::shouldGenerate($version)) {
+            $renderer = getenv('E7_PROPOSTAS_RENDERER_URL');
+            $kmsKey = getenv('E7_PROPOSTAS_KMS_SIGNING_KEY_ID');
+            if (! is_string($renderer) || $renderer === '' || ! is_string($bucket) || $bucket === '' || ! is_string($kmsKey) || $kmsKey === '' || ! is_string($region) || $region === '') {
+                throw new \RuntimeException('Artifact infrastructure is not configured.');
+            }
+            $html = $this->embedLocalImages($this->evidenceHtml($acceptance));
+            $response = wp_remote_post($renderer, [
+                'timeout' => 60,
+                'headers' => ['Content-Type' => 'application/json'],
+                'body' => wp_json_encode(['html' => $html, 'options' => ['printBackground' => true, 'format' => 'A4']]),
+            ]);
+            if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+                throw new \RuntimeException('Chromium renderer failed.');
+            }
+            $pdf = wp_remote_retrieve_body($response);
+            if (! str_starts_with($pdf, '%PDF-')) {
+                throw new \RuntimeException('Renderer did not return a PDF.');
+            }
+            $hash = hash('sha256', $pdf);
+            $kms = new KmsClient(['version' => 'latest', 'region' => $region]);
+            $signature = $kms->sign(['KeyId' => $kmsKey, 'Message' => hex2bin($hash), 'MessageType' => 'DIGEST', 'SigningAlgorithm' => 'RSASSA_PSS_SHA_256']);
+            $key = 'proposals/' . $acceptance['acceptance']['public_id'] . '.pdf';
+            $s3 = new S3Client(['version' => 'latest', 'region' => $region]);
+            $retentionYears = filter_var(getenv('E7_PROPOSTAS_RETENTION_YEARS') ?: '7', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 20]]);
+            if (! is_int($retentionYears)) {
+                throw new \RuntimeException('The artifact retention period is invalid.');
+            }
+            $put = $s3->putObject(['Bucket' => $bucket, 'Key' => $key, 'Body' => $pdf, 'ContentType' => 'application/pdf', 'ServerSideEncryption' => 'aws:kms', 'ObjectLockMode' => 'GOVERNANCE', 'ObjectLockRetainUntilDate' => gmdate(DATE_ATOM, strtotime('+' . $retentionYears . ' years'))]);
+            $artifactKey = $key . '#' . (string) ($put->get('VersionId') ?? '');
+            $updated = $wpdb->query($wpdb->prepare(
+                'UPDATE ' . $wpdb->prefix . 'e7_proposal_versions SET artifact_key = %s, artifact_hash = %s, kms_signature = %s WHERE id = %d AND (artifact_key IS NULL OR artifact_key = %s)',
+                $artifactKey,
+                $hash,
+                base64_encode((string) $signature->get('Signature')),
+                (int) $job['version_id'],
+                '',
+            ));
+            if ($updated !== 1) {
+                throw new \RuntimeException('Could not persist the final artifact without overwriting existing evidence.');
+            }
+            $version['artifact_key'] = $artifactKey;
+            $version['artifact_hash'] = $hash;
+            $version['kms_signature'] = base64_encode((string) $signature->get('Signature'));
         }
-        $html = $this->embedLocalImages($this->evidenceHtml($acceptance));
-        $response = wp_remote_post($renderer, [
-            'timeout' => 60,
-            'headers' => ['Content-Type' => 'application/json'],
-            'body' => wp_json_encode([
-                'html' => $html,
-                'options' => ['printBackground' => true, 'format' => 'A4'],
-            ]),
-        ]);
-        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
-            throw new \RuntimeException('Chromium renderer failed.');
+
+        $events = is_array($acceptance['audit_events'] ?? null) ? $acceptance['audit_events'] : [];
+        if (! ArtifactState::hasEvent($events, 'artifact.finalized')) {
+            $this->repository->appendAudit((int) $job['version_id'], 'artifact.finalized', [
+                'artifact_hash' => (string) $version['artifact_hash'],
+                'artifact_key' => (string) $version['artifact_key'],
+            ]);
         }
-        $pdf = wp_remote_retrieve_body($response);
-        if (! str_starts_with($pdf, '%PDF-')) {
-            throw new \RuntimeException('Renderer did not return a PDF.');
+        if (! $this->features->finalEmailEnabled()) {
+            if (! ArtifactState::hasEvent($events, 'final_email.skipped')) {
+                $this->repository->appendAudit((int) $job['version_id'], 'final_email.skipped', ['reason' => 'feature_disabled']);
+            }
+            return null;
         }
-        $hash = hash('sha256', $pdf);
-        $kms = new KmsClient(['version' => 'latest', 'region' => $region]);
-        $signature = $kms->sign(['KeyId' => $kmsKey, 'Message' => hex2bin($hash), 'MessageType' => 'DIGEST', 'SigningAlgorithm' => 'RSASSA_PSS_SHA_256']);
-        $key = 'proposals/' . $acceptance['acceptance']['public_id'] . '.pdf';
-        $s3 = new S3Client(['version' => 'latest', 'region' => $region]);
-        $retentionYears = filter_var(getenv('E7_PROPOSTAS_RETENTION_YEARS') ?: '7', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 20]]);
-        if (! is_int($retentionYears)) {
-            throw new \RuntimeException('The artifact retention period is invalid.');
+
+        $providerId = ArtifactState::providerMessageId($events);
+        if ($providerId !== null) {
+            return $providerId;
         }
-        $put = $s3->putObject(['Bucket' => $bucket, 'Key' => $key, 'Body' => $pdf, 'ContentType' => 'application/pdf', 'ServerSideEncryption' => 'aws:kms', 'ObjectLockMode' => 'GOVERNANCE', 'ObjectLockRetainUntilDate' => gmdate(DATE_ATOM, strtotime('+' . $retentionYears . ' years'))]);
-        $updated = $wpdb->update($wpdb->prefix . 'e7_proposal_versions', ['artifact_key' => $key . '#' . (string) ($put->get('VersionId') ?? ''), 'artifact_hash' => $hash, 'kms_signature' => base64_encode((string) $signature->get('Signature'))], ['id' => (int) $job['version_id']]);
-        if ($updated !== 1) {
-            throw new \RuntimeException('Could not persist the final artifact.');
+        if ($pdf === null) {
+            if (! is_string($bucket) || $bucket === '' || ! is_string($region) || $region === '') {
+                throw new \RuntimeException('Artifact retrieval infrastructure is not configured.');
+            }
+            $pdf = $this->fetchPersistedPdf($version, $bucket, $region);
         }
-        $providerId = null;
-        if ($this->features->finalEmailEnabled()) {
-            $providerId = $this->sendFinalEmail($acceptance, $pdf, $region);
-        } else {
-            $this->repository->appendAudit((int) $job['version_id'], 'final_email.skipped', ['reason' => 'feature_disabled']);
-        }
-        $this->repository->appendAudit((int) $job['version_id'], 'artifact.finalized', ['artifact_hash' => $hash, 's3_key' => $key, 'provider_message_id' => $providerId]);
+        $providerId = $this->sendFinalEmail($acceptance, $pdf, $region);
+        $this->repository->appendAudit((int) $job['version_id'], 'final_email.sent', ['provider_message_id' => $providerId]);
         return $providerId;
+    }
+
+    /** @param array<string, mixed> $version */
+    private function fetchPersistedPdf(array $version, string $bucket, string $region): string
+    {
+        [$key, $versionId] = array_pad(explode('#', (string) $version['artifact_key'], 2), 2, '');
+        $request = ['Bucket' => $bucket, 'Key' => $key];
+        if ($versionId !== '') {
+            $request['VersionId'] = $versionId;
+        }
+        $result = (new S3Client(['version' => 'latest', 'region' => $region]))->getObject($request);
+        $pdf = (string) $result->get('Body');
+        if (! str_starts_with($pdf, '%PDF-') || ! hash_equals((string) $version['artifact_hash'], hash('sha256', $pdf))) {
+            throw new \RuntimeException('Persisted artifact failed its integrity check.');
+        }
+        return $pdf;
     }
 
     /** @param array<string, mixed> $record */

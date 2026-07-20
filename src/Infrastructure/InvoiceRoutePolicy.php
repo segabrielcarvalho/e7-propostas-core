@@ -17,11 +17,16 @@ final class InvoiceRoutePolicy
         }
         $supplier = is_array($invoice['supplier_profile'] ?? null) ? $invoice['supplier_profile'] : [];
         $customer = is_array($invoice['customer_profile'] ?? null) ? $invoice['customer_profile'] : [];
+        $customerName = (string) ($customer['legal_name'] ?? '');
+        if (($customer['type'] ?? null) === 'sole_trader') {
+            $tradingName = trim((string) ($customer['trading_name'] ?? ''));
+            $customerName = $tradingName !== '' ? $tradingName : 'Sole trader customer';
+        }
         $replacementStatus = (string) ($invoice['replacement_status'] ?? '');
         return [
             'invoice_number' => (string) ($invoice['invoice_number'] ?? ''),
             'supplier_legal_name' => (string) ($supplier['legal_name'] ?? ''),
-            'customer_legal_name' => (string) ($customer['legal_name'] ?? ''),
+            'customer_legal_name' => $customerName,
             'issued_at' => (string) ($invoice['issued_at'] ?? ''),
             'currency' => (string) ($invoice['currency'] ?? ''),
             'total' => MoneyDecimal::formatInput((int) ($invoice['total_minor'] ?? 0)),

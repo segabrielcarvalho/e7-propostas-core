@@ -39,6 +39,24 @@ final class InvoiceRoutesTest extends TestCase
         self::assertSame('92233720368547758.07', $record['total']);
     }
 
+    public function test_public_verification_does_not_expose_a_sole_traders_legal_name(): void
+    {
+        $invoice = $this->invoice();
+        $invoice['customer_profile']['type'] = 'sole_trader';
+        $invoice['customer_profile']['legal_name'] = 'Private Civil Name';
+        $invoice['customer_profile']['trading_name'] = '';
+
+        $record = InvoiceRoutePolicy::verificationRecord($invoice, true);
+
+        self::assertSame('Sole trader customer', $record['customer_legal_name']);
+        self::assertNotContains('Private Civil Name', $record);
+
+        $invoice['customer_profile']['trading_name'] = 'Public Trading Name';
+        $record = InvoiceRoutePolicy::verificationRecord($invoice, true);
+
+        self::assertSame('Public Trading Name', $record['customer_legal_name']);
+    }
+
     public function test_cancelled_invoice_stays_verifiable_and_points_to_an_issued_replacement(): void
     {
         $invoice = $this->invoice();

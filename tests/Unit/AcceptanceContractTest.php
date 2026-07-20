@@ -142,7 +142,7 @@ final class AcceptanceContractTest extends TestCase
         self::assertStringContainsString('DAY_IN_SECONDS', $verifier);
     }
 
-    public function test_otp_is_bound_to_the_configured_contact_and_persisted_destination(): void
+    public function test_otp_is_bound_to_the_editable_requested_contact_and_persisted_destination(): void
     {
         $controller = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/RestController.php');
         $repository = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/ProposalRepository.php');
@@ -151,7 +151,10 @@ final class AcceptanceContractTest extends TestCase
         self::assertIsString($controller);
         self::assertIsString($repository);
         self::assertIsString($installer);
-        self::assertStringContainsString('configuredOtpDestination', $controller);
+        self::assertStringContainsString('$destination = OtpDestination::from(', $controller);
+        self::assertStringNotContainsString('configuredOtpDestination', $controller);
+        self::assertStringNotContainsString('$configuredEmail', $controller);
+        self::assertStringNotContainsString('$configuredPhone', $controller);
         self::assertStringContainsString('assertOtpContactBinding', $controller);
         self::assertStringContainsString("'destination' => \$destination", $repository);
         self::assertStringContainsString('destination varchar(254)', $installer);

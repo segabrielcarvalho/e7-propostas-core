@@ -109,11 +109,10 @@ final class RestController
         }
         $settings = $this->repository->getSettings((int) $version['post_id']);
         try {
-            $requestedDestination = OtpDestination::from(
+            $destination = OtpDestination::from(
                 (string) $request->get_param('channel'),
                 (string) $request->get_param('destination'),
             );
-            $destination = $this->configuredOtpDestination($settings, $requestedDestination);
         } catch (\InvalidArgumentException) {
             return new \WP_Error('e7_otp_destination', __('Informe um e-mail ou telefone válido.', 'e7-propostas'), ['status' => 422]);
         }
@@ -242,7 +241,7 @@ final class RestController
                     if (! is_array($otp)) {
                         throw new \UnexpectedValueException('otp_required');
                     }
-                    $this->assertOtpContactBinding($settings, $otp, $email, $phone);
+                    $this->assertOtpContactBinding($otp, $email, $phone);
                     $verification = $this->verifyChallenge($otp, (string) $request->get_param('otp'));
                     if (! $verification->isValid) {
                         if ($verification->reason === 'invalid' || $verification->reason === 'locked') {
@@ -318,27 +317,12 @@ final class RestController
         return substr(sanitize_text_field((string) ($_SERVER['HTTP_USER_AGENT'] ?? '')), 0, 1000);
     }
 
-    /** @param array<string, mixed> $settings */
-    private function configuredOtpDestination(array $settings, OtpDestination $requested): OtpDestination
+    /** @param array<string, mixed> $otp */
+    private function assertOtpContactBinding(array $otp, string $email, string $phone): void
     {
-        $configured = $requested->channel === 'email'
-            ? trim((string) ($settings['client_email'] ?? ''))
-            : trim((string) ($settings['client_phone'] ?? ''));
-        return $configured === '' ? $requested : OtpDestination::from($requested->channel, $configured);
-    }
-
-    /** @param array<string, mixed> $settings @param array<string, mixed> $otp */
-    private function assertOtpContactBinding(array $settings, array $otp, string $email, string $phone): void
-    {
-        $configuredEmail = trim((string) ($settings['client_email'] ?? ''));
-        $configuredPhone = trim((string) ($settings['client_phone'] ?? ''));
         $channel = (string) ($otp['channel'] ?? '');
         if (AcceptancePolicy::phoneRequiredForVerifiedChannel($this->features->otpEnabled(), $channel) && $phone === '') {
             throw new \InvalidArgumentException('Signer phone is required for this authentication method.');
-        }
-        if (($channel === 'email' && $configuredEmail !== '' && strcasecmp($configuredEmail, $email) !== 0)
-            || ($channel === 'sms' && $configuredPhone !== '' && ! hash_equals($configuredPhone, $phone))) {
-            throw new \InvalidArgumentException('Signer contact does not match proposal settings.');
         }
         $destination = (string) ($otp['destination'] ?? '');
         $submitted = $channel === 'email' ? $email : ($channel === 'sms' ? $phone : '');

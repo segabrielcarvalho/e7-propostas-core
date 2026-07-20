@@ -140,6 +140,46 @@ final class InvoiceService
         return $processing;
     }
 
+    /** @param array<string, string|null> $artifact @return array<string, mixed> */
+    public function markIssued(int $invoiceId, array $artifact): array
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        InvoiceStatus::assertTransition((string) $invoice['status'], InvoiceStatus::ISSUED);
+        $key = trim((string) ($artifact['artifact_key'] ?? ''));
+        $hash = strtolower(trim((string) ($artifact['artifact_hash'] ?? '')));
+        if ($key === '' || ! preg_match('/^[a-f0-9]{64}$/', $hash)) {
+            throw new \InvalidArgumentException('Issued invoice artifact evidence is invalid.');
+        }
+        $issued = $this->store->markIssued($invoiceId, [
+            'artifact_key' => $key,
+            'artifact_hash' => $hash,
+            'kms_signature' => isset($artifact['kms_signature']) ? (string) $artifact['kms_signature'] : null,
+        ]);
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.issued', [
+            'invoice_id' => $invoiceId,
+            'invoice_number' => (string) $invoice['invoice_number'],
+            'artifact_hash' => $hash,
+        ]);
+        return $issued;
+    }
+
+    public function markFinalizationFailed(int $invoiceId, string $message): void
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        InvoiceStatus::assertTransition((string) $invoice['status'], InvoiceStatus::FAILED);
+        $this->store->markFailed($invoiceId, $message);
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.finalization_failed', [
+            'invoice_id' => $invoiceId,
+            'reason_hash' => hash('sha256', $message),
+        ]);
+    }
+
+    /** @return array<string, mixed> */
+    public function invoice(int $invoiceId): array
+    {
+        return $this->requireInvoice($invoiceId);
+    }
+
     /** @return array<string, mixed> */
     public function cancel(int $invoiceId, int $actorId): array
     {

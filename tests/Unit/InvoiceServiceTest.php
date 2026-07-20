@@ -95,6 +95,46 @@ final class InvoiceServiceTest extends TestCase
         self::assertCount(1, $store->jobs);
     }
 
+    public function test_finalizer_marks_processing_invoice_issued_with_artifact_contract(): void
+    {
+        $store = new InMemoryInvoiceStore($this->context());
+        $store->invoice = $store->createDraft([
+            'acceptance_id' => 41, 'version_id' => 5, 'currency' => 'EUR',
+            'customer_profile' => $this->profile(), 'supplier_profile' => [],
+            'items' => $this->items(), 'total_minor' => 127500,
+        ]);
+        $store->invoice['status'] = 'processing';
+        $store->invoice['invoice_number'] = 'E7-2026-4821';
+
+        $issued = (new InvoiceService($store))->markIssued(10, [
+            'artifact_key' => 'invoices/example.pdf',
+            'artifact_hash' => str_repeat('a', 64),
+            'kms_signature' => 'signature',
+        ]);
+
+        self::assertSame('issued', $issued['status']);
+        self::assertSame('invoices/example.pdf', $issued['artifact_key']);
+        self::assertContains('invoice.issued', array_column($store->audits, 'type'));
+    }
+
+    public function test_finalizer_failure_is_exposed_without_clearing_reserved_number(): void
+    {
+        $store = new InMemoryInvoiceStore($this->context());
+        $store->invoice = $store->createDraft([
+            'acceptance_id' => 41, 'version_id' => 5, 'currency' => 'EUR',
+            'customer_profile' => $this->profile(), 'supplier_profile' => [],
+            'items' => $this->items(), 'total_minor' => 127500,
+        ]);
+        $store->invoice['status'] = 'processing';
+        $store->invoice['invoice_number'] = 'E7-2026-4821';
+
+        (new InvoiceService($store))->markFinalizationFailed(10, 'renderer unavailable');
+
+        self::assertSame('failed', $store->invoice['status']);
+        self::assertSame('E7-2026-4821', $store->invoice['invoice_number']);
+        self::assertContains('invoice.finalization_failed', array_column($store->audits, 'type'));
+    }
+
     public function test_only_customer_profile_can_be_corrected_while_draft(): void
     {
         $store = new InMemoryInvoiceStore($this->context());
@@ -211,6 +251,7 @@ final class InMemoryInvoiceStore implements InvoiceStore
         return $this->invoice;
     }
     public function markFailed(int $invoiceId, string $message): void { $this->invoice['status'] = 'failed'; }
+    public function markIssued(int $invoiceId, array $artifact): array { $this->invoice = array_merge($this->invoice, $artifact, ['status' => 'issued']); return $this->invoice; }
     public function beginRetry(int $invoiceId): array { $this->invoice['status'] = 'processing'; return $this->invoice; }
     public function cancel(int $invoiceId): array { $this->invoice['status'] = 'cancelled'; return $this->invoice; }
     public function createReplacement(int $invoiceId): array { return $this->invoice; }

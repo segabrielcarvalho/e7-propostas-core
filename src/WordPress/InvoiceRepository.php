@@ -273,6 +273,22 @@ final class InvoiceRepository implements InvoiceStore
         ]));
     }
 
+    public function markIssued(int $invoiceId, array $artifact): array
+    {
+        global $wpdb;
+        $now = current_time('mysql', true);
+        $this->mustWrite($wpdb->update($this->table('e7_proposal_invoices'), [
+            'status' => 'issued',
+            'issued_at' => $now,
+            'artifact_key' => $artifact['artifact_key'] ?? null,
+            'artifact_hash' => $artifact['artifact_hash'] ?? null,
+            'kms_signature' => $artifact['kms_signature'] ?? null,
+            'last_error' => null,
+            'updated_at' => $now,
+        ], ['id' => $invoiceId, 'status' => 'processing']));
+        return $this->requireInvoice($invoiceId);
+    }
+
     public function appendAudit(int $versionId, string $type, array $payload): void
     {
         $this->proposals->appendAudit($versionId, $type, $payload);

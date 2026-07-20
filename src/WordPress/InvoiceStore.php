@@ -19,6 +19,8 @@ interface InvoiceStore
     /** @return array<string, mixed> */
     public function beginIssue(int $invoiceId): array;
     public function markFailed(int $invoiceId, string $message): void;
+    /** @param array<string, string|null> $artifact @return array<string, mixed> */
+    public function markIssued(int $invoiceId, array $artifact): array;
     /** @return array<string, mixed> */
     public function beginRetry(int $invoiceId): array;
     /** @return array<string, mixed> */

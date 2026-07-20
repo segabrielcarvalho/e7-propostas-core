@@ -82,7 +82,13 @@ final class InvoiceHtmlRenderer
 
     private static function money(int $minor): string
     {
-        return '€' . number_format($minor / 100, 2, '.', ',');
+        $major = (string) intdiv($minor, 100);
+        $grouped = preg_replace('/\B(?=(\d{3})+(?!\d))/', ',', $major);
+        if (! is_string($grouped)) {
+            throw new \RuntimeException('Invoice amount could not be formatted.');
+        }
+
+        return '€' . $grouped . '.' . str_pad((string) ($minor % 100), 2, '0', STR_PAD_LEFT);
     }
 
     private static function date(string $mysql): string

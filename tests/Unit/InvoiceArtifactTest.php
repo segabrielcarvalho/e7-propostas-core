@@ -42,6 +42,17 @@ final class InvoiceArtifactTest extends TestCase
         self::assertStringNotContainsString('VAT number', $html);
     }
 
+    public function test_editorial_invoice_formats_minor_units_without_floating_point_precision_loss(): void
+    {
+        $invoice = $this->invoice();
+        $invoice['total_minor'] = PHP_INT_MAX;
+        $invoice['items'] = [['description' => 'Precision-safe service', 'amount_minor' => PHP_INT_MAX]];
+
+        $html = (new InvoiceHtmlRenderer())->render($invoice, 'https://example.test/invoice/verify/' . $invoice['public_id'] . '/');
+
+        self::assertStringContainsString('€92,233,720,368,547,758.07', $html);
+    }
+
     public function test_complete_artifact_is_reused_without_rendering_signing_or_storing_again(): void
     {
         $invoice = $this->invoice() + [

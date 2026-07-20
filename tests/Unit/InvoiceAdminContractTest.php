@@ -39,6 +39,38 @@ final class InvoiceAdminContractTest extends TestCase
         self::assertStringNotContainsString('NFS-e', $admin);
     }
 
+    public function test_proposal_invoice_items_are_scoped_dynamic_and_use_eur_major_units(): void
+    {
+        $admin = $this->read('src/WordPress/AdminMetaBox.php');
+
+        self::assertStringContainsString('MoneyDecimal::parse', $admin);
+        self::assertStringContainsString('MoneyDecimal::formatInput', $admin);
+        self::assertStringContainsString('data-e7-invoice-items', $admin);
+        self::assertStringContainsString('data-e7-invoice-row', $admin);
+        self::assertStringContainsString('data-e7-add-invoice-item', $admin);
+        self::assertStringContainsString('data-e7-remove-invoice-item', $admin);
+        self::assertStringContainsString('data-e7-move-up', $admin);
+        self::assertStringContainsString('data-e7-move-down', $admin);
+        self::assertStringContainsString('data-e7-invoice-total', $admin);
+        self::assertStringContainsString("locale === 'en_IE'", $admin);
+        self::assertStringContainsString("currency === 'EUR'", $admin);
+        self::assertStringContainsString('wp_add_inline_script', $admin);
+        self::assertStringNotContainsString('Valor em unidade menor', $admin);
+    }
+
+    public function test_legacy_items_use_the_same_readable_eur_decimal_contract(): void
+    {
+        $admin = $this->read('src/WordPress/InvoiceAdmin.php');
+
+        self::assertStringContainsString('MoneyDecimal::parse', $admin);
+        self::assertStringContainsString('MoneyDecimal::formatInput', $admin);
+        self::assertStringContainsString('MoneyDecimal::formatDisplay', $admin);
+        self::assertStringContainsString("[amount]", $admin);
+        self::assertStringNotContainsString('placeholder="Amount minor"', $admin);
+        self::assertStringContainsString("\$editable = \$status === 'draft'", $admin);
+        self::assertStringContainsString('type="text" readonly', $admin);
+    }
+
     public function test_proposal_list_adds_invoice_status_and_prepare_invoice_action(): void
     {
         $list = $this->read('src/WordPress/ProposalAdminList.php');

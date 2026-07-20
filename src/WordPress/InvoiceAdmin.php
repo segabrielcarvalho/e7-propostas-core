@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace E7Propostas\WordPress;
 
+use E7Propostas\Domain\MoneyDecimal;
 use E7Propostas\Domain\SupplierProfile;
 use E7Propostas\Infrastructure\ArtifactDownload;
 
@@ -147,9 +148,9 @@ final class InvoiceAdmin
         $this->renderCustomerFields((array) $invoice['customer_profile'], ! $editable);
         echo '<h2>' . esc_html__('Invoice items', 'e7-propostas') . '</h2><table class="widefat striped"><thead><tr><th>' . esc_html__('Description', 'e7-propostas') . '</th><th>' . esc_html__('Amount', 'e7-propostas') . '</th></tr></thead><tbody>';
         foreach ((array) $invoice['items'] as $item) {
-            echo '<tr><td><input type="text" readonly value="' . esc_attr((string) ($item['description'] ?? '')) . '" class="large-text"></td><td><input type="text" readonly value="' . esc_attr($this->money((int) ($item['amount_minor'] ?? 0))) . '"></td></tr>';
+            echo '<tr><td><input type="text" readonly value="' . esc_attr((string) ($item['description'] ?? '')) . '" class="large-text"></td><td><input type="text" readonly value="€' . esc_attr(MoneyDecimal::formatDisplay((int) ($item['amount_minor'] ?? 0))) . '"></td></tr>';
         }
-        echo '</tbody><tfoot><tr><th>Total</th><th>' . esc_html($this->money((int) $invoice['total_minor'])) . '</th></tr></tfoot></table>';
+        echo '</tbody><tfoot><tr><th>Total</th><th>€' . esc_html(MoneyDecimal::formatDisplay((int) $invoice['total_minor'])) . '</th></tr></tfoot></table>';
         if ($editable) {
             submit_button(__('Save draft', 'e7-propostas'));
         }
@@ -271,7 +272,8 @@ final class InvoiceAdmin
         echo '<h2>' . esc_html__('Invoice items', 'e7-propostas') . '</h2>';
         for ($index = 0; $index < 5; $index++) {
             $item = is_array($items[$index] ?? null) ? $items[$index] : [];
-            echo '<p><input class="large-text" name="invoice_items[' . $index . '][description]" value="' . esc_attr((string) ($item['description'] ?? '')) . '" placeholder="Description"><input name="invoice_items[' . $index . '][amount_minor]" value="' . esc_attr((string) ($item['amount_minor'] ?? '')) . '" type="number" min="1" step="1" placeholder="Amount minor"></p>';
+            $amount = isset($item['amount_minor']) && is_int($item['amount_minor']) ? MoneyDecimal::formatInput($item['amount_minor']) : '';
+            echo '<p><input class="large-text" name="invoice_items[' . $index . '][description]" value="' . esc_attr((string) ($item['description'] ?? '')) . '" placeholder="Description"><input name="invoice_items[' . $index . '][amount]" value="' . esc_attr($amount) . '" type="text" inputmode="decimal" placeholder="Amount (EUR), e.g. 1500.00"></p>';
         }
     }
 
@@ -305,8 +307,12 @@ final class InvoiceAdmin
             if (! is_array($item)) {
                 continue;
             }
-            $amount = trim((string) ($item['amount_minor'] ?? ''));
-            $normalized[] = ['description' => (string) ($item['description'] ?? ''), 'amount_minor' => ctype_digit($amount) ? (int) $amount : $amount];
+            $description = is_scalar($item['description'] ?? '') ? (string) $item['description'] : '';
+            $amount = is_scalar($item['amount'] ?? '') ? trim((string) $item['amount']) : '';
+            if (trim($description) === '' && $amount === '') {
+                continue;
+            }
+            $normalized[] = ['description' => $description, 'amount_minor' => MoneyDecimal::parse($amount)];
         }
         return $normalized;
     }
@@ -317,11 +323,6 @@ final class InvoiceAdmin
         $normalized = SupplierProfile::normalize($supplier);
         update_option('e7_invoice_supplier_profile', $normalized, false);
         return [];
-    }
-
-    private function money(int $minor): string
-    {
-        return '€' . number_format($minor / 100, 2, '.', ',');
     }
 
     private function redirect(int $invoiceId, int $acceptanceId, string $notice): never

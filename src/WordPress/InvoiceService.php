@@ -41,11 +41,6 @@ final class InvoiceService
             }
             $profile = BusinessProfile::normalize($legacyProfile);
             $items = InvoiceItems::normalize($legacyItems);
-            $this->store->appendAudit((int) $context['version_id'], 'invoice.legacy_backfill_confirmed', [
-                'acceptance_id' => $acceptanceId,
-                'actor_id' => $actorId,
-                'items_total_minor' => InvoiceItems::total($items),
-            ]);
         } else {
             $profile = BusinessProfile::normalize($profile);
             $items = InvoiceItems::normalize($items);
@@ -68,11 +63,23 @@ final class InvoiceService
             'supplier_profile' => $supplier,
             'items' => $items,
             'total_minor' => $total,
+            'legacy_backfill_required' => $legacy,
         ]);
+        if ($legacy) {
+            $invoice = $this->store->backfillLegacy((int) $invoice['id'], $profile, $items, $total);
+            $this->store->appendAudit((int) $context['version_id'], 'invoice.legacy_backfill_confirmed', [
+                'invoice_id' => (int) $invoice['id'],
+                'acceptance_id' => $acceptanceId,
+                'actor_id' => $actorId,
+                'items_total_minor' => $total,
+                'snapshot_hash' => (string) $invoice['snapshot_hash'],
+            ]);
+        }
         $this->store->appendAudit((int) $context['version_id'], 'invoice.draft_prepared', [
             'invoice_id' => (int) $invoice['id'],
             'actor_id' => $actorId,
             'total_minor' => $total,
+            'snapshot_hash' => (string) $invoice['snapshot_hash'],
         ]);
         return $invoice;
     }
@@ -94,8 +101,11 @@ final class InvoiceService
     {
         $invoice = $this->requireInvoice($invoiceId);
         InvoiceStatus::assertTransition((string) $invoice['status'], InvoiceStatus::PROCESSING);
+        if (! empty($invoice['legacy_backfill_required'])) {
+            throw new \DomainException('Legacy invoice data must be explicitly confirmed before issue.');
+        }
         $vies = (string) ($invoice['vies_status'] ?? 'not_requested');
-        if (in_array($vies, ['not_requested', 'invalid', 'unavailable'], true)) {
+        if (in_array($vies, ['not_requested', 'pending', 'invalid', 'unavailable'], true)) {
             if (! $viesAcknowledged) {
                 throw new \DomainException('VIES status requires explicit administrator acknowledgement before issue.');
             }
@@ -105,14 +115,7 @@ final class InvoiceService
                 'vies_status' => $vies,
             ]);
         }
-        $processing = $this->store->beginIssue($invoiceId);
-        try {
-            $this->store->enqueueFinalization($invoiceId);
-        } catch (\Throwable $error) {
-            $this->store->markFailed($invoiceId, $error->getMessage());
-            $this->store->appendAudit((int) $invoice['version_id'], 'invoice.finalization_failed', ['invoice_id' => $invoiceId, 'reason_hash' => hash('sha256', $error->getMessage())]);
-            throw $error;
-        }
+        $processing = $this->store->issueAndEnqueue($invoiceId);
         $this->store->appendAudit((int) $invoice['version_id'], 'invoice.issue_requested', [
             'invoice_id' => $invoiceId,
             'invoice_number' => (string) $processing['invoice_number'],
@@ -129,15 +132,35 @@ final class InvoiceService
         if (! is_string($invoice['invoice_number'] ?? null) || $invoice['invoice_number'] === '') {
             throw new \DomainException('A failed invoice must retain its reserved number.');
         }
-        $processing = $this->store->beginRetry($invoiceId);
-        try {
-            $this->store->enqueueFinalization($invoiceId);
-        } catch (\Throwable $error) {
-            $this->store->markFailed($invoiceId, $error->getMessage());
-            throw $error;
-        }
+        $processing = $this->store->retryAndEnqueue($invoiceId);
         $this->store->appendAudit((int) $invoice['version_id'], 'invoice.retry_requested', ['invoice_id' => $invoiceId, 'actor_id' => $actorId]);
         return $processing;
+    }
+
+    /** @param array<string, mixed> $profile @param list<array<string, mixed>> $items @return array<string, mixed> */
+    public function backfillLegacy(int $invoiceId, array $profile, array $items, bool $confirmed, int $actorId): array
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        if ($invoice['status'] !== InvoiceStatus::DRAFT || empty($invoice['legacy_backfill_required'])) {
+            throw new \DomainException('Legacy invoice backfill is no longer available.');
+        }
+        if (! $confirmed) {
+            throw new \DomainException('Legacy invoice backfill requires explicit correspondence confirmation.');
+        }
+        $normalizedProfile = BusinessProfile::normalize($profile);
+        $normalizedItems = InvoiceItems::normalize($items);
+        if ($normalizedItems === []) {
+            throw new \DomainException('Legacy invoice items are required.');
+        }
+        $total = InvoiceItems::total($normalizedItems);
+        $updated = $this->store->backfillLegacy($invoiceId, $normalizedProfile, $normalizedItems, $total);
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.legacy_backfill_confirmed', [
+            'invoice_id' => $invoiceId,
+            'actor_id' => $actorId,
+            'items_total_minor' => $total,
+            'snapshot_hash' => (string) $updated['snapshot_hash'],
+        ]);
+        return $updated;
     }
 
     /** @param array<string, string|null> $artifact @return array<string, mixed> */
@@ -197,13 +220,7 @@ final class InvoiceService
         if (! in_array($invoice['status'], [InvoiceStatus::ISSUED, InvoiceStatus::CANCELLED], true)) {
             throw new \DomainException('Only an issued or cancelled invoice can be replaced.');
         }
-        $replacement = $this->store->createReplacement($invoiceId);
-        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.replacement_created', [
-            'invoice_id' => $invoiceId,
-            'replacement_id' => (int) $replacement['id'],
-            'actor_id' => $actorId,
-        ]);
-        return $replacement;
+        return $this->store->createReplacement($invoiceId, $actorId);
     }
 
     /** @return array<string, mixed> */

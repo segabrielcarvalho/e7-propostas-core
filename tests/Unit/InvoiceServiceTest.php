@@ -56,7 +56,7 @@ final class InvoiceServiceTest extends TestCase
         }
     }
 
-    public function test_issue_acknowledgement_is_audited_and_failure_keeps_the_reserved_number(): void
+    public function test_issue_rolls_back_number_status_and_job_when_atomic_persistence_fails(): void
     {
         $store = new InMemoryInvoiceStore($this->context());
         $service = new InvoiceService($store);
@@ -67,8 +67,9 @@ final class InvoiceServiceTest extends TestCase
         try {
             $service->issue((int) $invoice['id'], true, 7);
         } finally {
-            self::assertSame('E7-2026-4821', $store->invoice['invoice_number']);
-            self::assertSame('failed', $store->invoice['status']);
+            self::assertNull($store->invoice['invoice_number']);
+            self::assertSame('draft', $store->invoice['status']);
+            self::assertSame([], $store->jobs);
             self::assertContains('invoice.vies_acknowledged', array_column($store->audits, 'type'));
         }
     }
@@ -93,6 +94,51 @@ final class InvoiceServiceTest extends TestCase
         self::assertSame('processing', $store->invoice['status']);
         self::assertSame('E7-2026-4821', $store->invoice['invoice_number']);
         self::assertCount(1, $store->jobs);
+        self::assertSame(1, $store->atomicCalls);
+    }
+
+    public function test_pending_vies_also_requires_explicit_acknowledgement(): void
+    {
+        $store = new InMemoryInvoiceStore($this->context());
+        $service = new InvoiceService($store);
+        $invoice = $service->prepareDraft(41, null, null, false, 7);
+        $store->invoice['vies_status'] = 'pending';
+
+        $this->expectException(\DomainException::class);
+        $service->issue((int) $invoice['id'], false, 7);
+    }
+
+    public function test_issue_is_blocked_until_legacy_backfill_marker_is_cleared(): void
+    {
+        $store = new InMemoryInvoiceStore($this->context());
+        $service = new InvoiceService($store);
+        $invoice = $service->prepareDraft(41, null, null, false, 7);
+        $store->invoice['legacy_backfill_required'] = true;
+        $store->invoice['vies_status'] = 'valid';
+
+        $this->expectException(\DomainException::class);
+        $service->issue((int) $invoice['id'], false, 7);
+    }
+
+    public function test_legacy_backfill_is_once_only_validated_and_audited_with_new_hash(): void
+    {
+        $store = new InMemoryInvoiceStore($this->context());
+        $store->invoice = $store->createDraft([
+            'acceptance_id' => 41, 'version_id' => 5, 'currency' => 'EUR',
+            'customer_profile' => [], 'supplier_profile' => [], 'items' => [], 'total_minor' => 0,
+            'legacy_backfill_required' => true,
+        ]);
+        $service = new InvoiceService($store);
+
+        $updated = $service->backfillLegacy(10, $this->profile(), $this->items(), true, 7);
+
+        self::assertFalse($updated['legacy_backfill_required']);
+        self::assertSame(127500, $updated['total_minor']);
+        self::assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $updated['snapshot_hash']);
+        self::assertContains('invoice.legacy_backfill_confirmed', array_column($store->audits, 'type'));
+
+        $this->expectException(\DomainException::class);
+        $service->backfillLegacy(10, $this->profile(), $this->items(), true, 7);
     }
 
     public function test_finalizer_marks_processing_invoice_issued_with_artifact_contract(): void
@@ -226,6 +272,7 @@ final class InMemoryInvoiceStore implements InvoiceStore
     /** @var list<int> */
     public array $jobs = [];
     public bool $failEnqueue = false;
+    public int $atomicCalls = 0;
 
     /** @param array<string, mixed> $context */
     public function __construct(private array $context)
@@ -237,7 +284,7 @@ final class InMemoryInvoiceStore implements InvoiceStore
     public function get(int $invoiceId): ?array { return $this->invoice; }
     public function createDraft(array $snapshot): array
     {
-        return $this->invoice = $snapshot + ['id' => 10, 'status' => 'draft', 'invoice_number' => null, 'vies_status' => 'not_requested'];
+        return $this->invoice = $snapshot + ['id' => 10, 'status' => 'draft', 'invoice_number' => null, 'vies_status' => 'not_requested', 'legacy_backfill_required' => false, 'snapshot_hash' => str_repeat('a', 64)];
     }
     public function updateDraftCustomer(int $invoiceId, array $profile): array
     {
@@ -254,12 +301,39 @@ final class InMemoryInvoiceStore implements InvoiceStore
     public function markIssued(int $invoiceId, array $artifact): array { $this->invoice = array_merge($this->invoice, $artifact, ['status' => 'issued']); return $this->invoice; }
     public function beginRetry(int $invoiceId): array { $this->invoice['status'] = 'processing'; return $this->invoice; }
     public function cancel(int $invoiceId): array { $this->invoice['status'] = 'cancelled'; return $this->invoice; }
-    public function createReplacement(int $invoiceId): array { return $this->invoice; }
+    public function createReplacement(int $invoiceId, int $actorId = 0): array { return $this->invoice; }
     public function updateVies(int $invoiceId, array $result): array { return $this->invoice = array_merge($this->invoice, ['vies_status' => $result['status']], $result); }
     public function enqueueFinalization(int $invoiceId): void
     {
         if ($this->failEnqueue) { throw new \RuntimeException('queue unavailable'); }
         $this->jobs[] = $invoiceId;
+    }
+    public function issueAndEnqueue(int $invoiceId): array
+    {
+        $this->atomicCalls++;
+        if ($this->failEnqueue) { throw new \RuntimeException('queue unavailable'); }
+        $this->invoice['status'] = 'processing';
+        $this->invoice['invoice_number'] ??= 'E7-2026-4821';
+        $this->jobs = [$invoiceId];
+        return $this->invoice;
+    }
+    public function retryAndEnqueue(int $invoiceId): array
+    {
+        $this->atomicCalls++;
+        if ($this->failEnqueue) { throw new \RuntimeException('queue unavailable'); }
+        $this->invoice['status'] = 'processing';
+        $this->jobs = [$invoiceId];
+        return $this->invoice;
+    }
+    public function backfillLegacy(int $invoiceId, array $profile, array $items, int $totalMinor): array
+    {
+        if (empty($this->invoice['legacy_backfill_required'])) { throw new \DomainException('already backfilled'); }
+        $this->invoice['customer_profile'] = $profile;
+        $this->invoice['items'] = $items;
+        $this->invoice['total_minor'] = $totalMinor;
+        $this->invoice['legacy_backfill_required'] = false;
+        $this->invoice['snapshot_hash'] = hash('sha256', json_encode([$profile, $items, $totalMinor]));
+        return $this->invoice;
     }
     public function appendAudit(int $versionId, string $type, array $payload): void { $this->audits[] = compact('type', 'payload'); }
 }

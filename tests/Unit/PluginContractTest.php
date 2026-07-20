@@ -77,6 +77,19 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString('flush_rewrite_rules(false)', $installer);
     }
 
+    public function test_schema_migration_is_serialized_and_rechecked_inside_the_database_lock(): void
+    {
+        $installer = $this->read('src/WordPress/Installer.php');
+        $ensureStart = (int) strpos($installer, 'public static function ensureSchema');
+        $ensure = substr($installer, $ensureStart, 2500);
+
+        self::assertStringContainsString('withSchemaLock', $ensure);
+        self::assertStringContainsString("SELECT GET_LOCK", $installer);
+        self::assertStringContainsString("SELECT RELEASE_LOCK", $installer);
+        self::assertStringContainsString('finally', $installer);
+        self::assertGreaterThan(1, substr_count($ensure, "get_option('e7_propostas_schema_version')"));
+    }
+
     public function test_cli_migration_clones_only_proposal_content_and_safe_settings(): void
     {
         $plugin = $this->read('src/WordPress/Plugin.php');

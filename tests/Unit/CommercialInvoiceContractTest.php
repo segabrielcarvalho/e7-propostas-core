@@ -77,7 +77,7 @@ final class CommercialInvoiceContractTest extends TestCase
     public function test_schema_version_is_not_advanced_when_db_delta_misses_required_structures(): void
     {
         $installer = $this->read('src/WordPress/Installer.php');
-        $ensureSchema = substr($installer, (int) strpos($installer, 'public static function ensureSchema'), 700);
+        $ensureSchema = substr($installer, (int) strpos($installer, 'public static function ensureSchema'), 1200);
 
         self::assertStringContainsString('self::assertSchemaInstalled()', $ensureSchema);
         self::assertStringContainsString("update_option('e7_propostas_schema_version'", $ensureSchema);
@@ -91,9 +91,11 @@ final class CommercialInvoiceContractTest extends TestCase
     {
         $installer = $this->read('src/WordPress/Installer.php');
         $activate = substr($installer, (int) strpos($installer, 'public static function activate'), 800);
+        $ensureSchema = substr($installer, (int) strpos($installer, 'public static function ensureSchema'), 1200);
 
-        self::assertStringContainsString('self::migrateAcceptanceIdempotencyIndex()', $activate);
-        self::assertStringContainsString('self::migrateInvoiceAcceptanceIndex()', $activate);
+        self::assertStringContainsString('self::ensureSchema()', $activate);
+        self::assertStringContainsString('self::migrateAcceptanceIdempotencyIndex()', $ensureSchema);
+        self::assertStringContainsString('self::migrateInvoiceAcceptanceIndex()', $ensureSchema);
         self::assertStringContainsString('SchemaRequirements::hasIndex', $installer);
     }
 

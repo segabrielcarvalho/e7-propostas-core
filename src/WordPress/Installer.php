@@ -22,16 +22,8 @@ final class Installer
             wp_die(esc_html__('Ative o E7 Propostas Core somente no subsite de propostas.', 'e7-propostas'));
         }
 
-        self::installTables();
-        self::migrateInvoiceAcceptanceIndex();
-        self::migrateAcceptanceIdempotencyIndex();
-        self::migrateInvoiceRecords();
-        self::migrateInvoiceJobKeys();
-        self::assertSchemaInstalled();
+        self::ensureSchema();
         update_option('e7_propostas_core_enabled', '1', false);
-        update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
-
-        self::ensureCapabilities();
 
         PublicRoutes::registerRewrites();
         flush_rewrite_rules();
@@ -50,13 +42,34 @@ final class Installer
         if (get_option('e7_propostas_schema_version') === self::SCHEMA_VERSION) {
             return;
         }
-        self::installTables();
-        self::migrateInvoiceAcceptanceIndex();
-        self::migrateAcceptanceIdempotencyIndex();
-        self::migrateInvoiceRecords();
-        self::migrateInvoiceJobKeys();
-        self::assertSchemaInstalled();
-        update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
+        self::withSchemaLock(static function (): void {
+            if (get_option('e7_propostas_schema_version') === self::SCHEMA_VERSION) {
+                return;
+            }
+            self::installTables();
+            self::migrateInvoiceAcceptanceIndex();
+            self::migrateAcceptanceIdempotencyIndex();
+            self::migrateInvoiceRecords();
+            self::migrateInvoiceJobKeys();
+            self::assertSchemaInstalled();
+            update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
+        });
+    }
+
+    private static function withSchemaLock(callable $operation): void
+    {
+        global $wpdb;
+        $blogId = function_exists('get_current_blog_id') ? get_current_blog_id() : 0;
+        $lock = 'e7-schema-' . sha1((string) $wpdb->prefix . '|' . $blogId);
+        $acquired = $wpdb->get_var($wpdb->prepare('SELECT GET_LOCK(%s, 30)', $lock));
+        if ((int) $acquired !== 1) {
+            throw new \RuntimeException('Proposal schema migration lock is unavailable.');
+        }
+        try {
+            $operation();
+        } finally {
+            $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', $lock));
+        }
     }
 
     private static function ensureRewrites(): void

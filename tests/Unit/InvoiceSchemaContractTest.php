@@ -40,6 +40,7 @@ final class InvoiceSchemaContractTest extends TestCase
         self::assertStringContainsString('migrateInvoiceRecords', $installer);
         self::assertStringContainsString("bin2hex(random_bytes(16))", $installer);
         self::assertStringContainsString('$crypto->seal', $installer);
+        self::assertStringContainsString('MODIFY `invoice_number` varchar(64) NULL', $installer);
         self::assertStringContainsString('assertSchemaInstalled', $installer);
     }
 }

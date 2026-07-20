@@ -16,6 +16,11 @@ final class SchemaRequirements
         }
 
         self::assertColumns($schema, 'invoices', ['id', 'acceptance_id', 'version_id', 'public_id', 'invoice_number', 'currency', 'customer_payload', 'supplier_payload', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'vies_status', 'vies_checked_at', 'vies_evidence', 'issued_at', 'cancelled_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'kms_signature', 'provider_message_id', 'last_error', 'replacement_for_id', 'created_at', 'updated_at']);
+        self::assertNullable($schema, 'invoices', 'public_id', false);
+        self::assertNullable($schema, 'invoices', 'invoice_number', true);
+        self::assertNullable($schema, 'invoices', 'customer_payload', false);
+        self::assertNullable($schema, 'invoices', 'supplier_payload', false);
+        self::assertNullable($schema, 'invoices', 'items_payload', false);
         self::assertIndex($schema, 'invoices', 'acceptance_id', ['acceptance_id'], false);
         self::assertIndex($schema, 'invoices', 'public_id', ['public_id'], true);
         self::assertIndex($schema, 'invoices', 'invoice_number', ['invoice_number'], true);
@@ -51,6 +56,15 @@ final class SchemaRequirements
     {
         if (! self::hasIndex($schema, $table, $name, $columns, $unique)) {
             throw new \RuntimeException(sprintf('Required schema index is invalid: %s.%s', $table, $name));
+        }
+    }
+
+    /** @param array<string, array<string, mixed>> $schema */
+    private static function assertNullable(array $schema, string $table, string $column, bool $nullable): void
+    {
+        $definition = $schema[$table]['column_definitions'][$column] ?? null;
+        if (! is_array($definition) || ($definition['nullable'] ?? null) !== $nullable) {
+            throw new \RuntimeException(sprintf('Required schema nullability is invalid: %s.%s', $table, $column));
         }
     }
 }

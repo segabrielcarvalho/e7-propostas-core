@@ -35,6 +35,14 @@ final class SchemaRequirementsTest extends TestCase
         SchemaRequirements::assertReady($schema);
     }
 
+    public function test_non_nullable_draft_invoice_number_is_rejected(): void
+    {
+        $schema = $this->completeSchema();
+        $schema['invoices']['column_definitions']['invoice_number']['nullable'] = false;
+        $this->expectException(\RuntimeException::class);
+        SchemaRequirements::assertReady($schema);
+    }
+
     public function test_missing_composite_idempotency_index_is_rejected(): void
     {
         self::assertTrue(class_exists(SchemaRequirements::class), 'SchemaRequirements must exist.');
@@ -80,9 +88,17 @@ final class SchemaRequirementsTest extends TestCase
                 'indexes' => ['version_idempotency' => ['unique' => true, 'columns' => ['version_id', 'idempotency_key']]],
             ],
             'invoices' => [
-                'columns' => ['id', 'acceptance_id', 'version_id', 'invoice_number', 'currency', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'issued_at', 'sent_at', 'paid_at', 'voided_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'kms_signature', 'provider_message_id', 'replacement_for_id', 'created_at', 'updated_at'],
+                'columns' => ['id', 'acceptance_id', 'version_id', 'public_id', 'invoice_number', 'currency', 'customer_payload', 'supplier_payload', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'vies_status', 'vies_checked_at', 'vies_evidence', 'issued_at', 'cancelled_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'kms_signature', 'provider_message_id', 'last_error', 'replacement_for_id', 'created_at', 'updated_at'],
+                'column_definitions' => [
+                    'public_id' => ['nullable' => false],
+                    'invoice_number' => ['nullable' => true],
+                    'customer_payload' => ['nullable' => false],
+                    'supplier_payload' => ['nullable' => false],
+                    'items_payload' => ['nullable' => false],
+                ],
                 'indexes' => [
                     'acceptance_id' => ['unique' => false, 'columns' => ['acceptance_id']],
+                    'public_id' => ['unique' => true, 'columns' => ['public_id']],
                     'invoice_number' => ['unique' => true, 'columns' => ['invoice_number']],
                     'replacement_for_id' => ['unique' => true, 'columns' => ['replacement_for_id']],
                     'version_status' => ['unique' => false, 'columns' => ['version_id', 'status']],

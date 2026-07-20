@@ -10,7 +10,7 @@ use E7Propostas\Infrastructure\Crypto;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.6.0';
+    public const SCHEMA_VERSION = '1.6.1';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -27,12 +27,7 @@ final class Installer
         update_option('e7_propostas_core_enabled', '1', false);
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
 
-        $role = get_role('administrator');
-        if ($role) {
-            foreach (ProposalPostType::capabilities() as $capability) {
-                $role->add_cap($capability);
-            }
-        }
+        self::ensureCapabilities();
 
         PublicRoutes::registerRewrites();
         flush_rewrite_rules();
@@ -45,6 +40,7 @@ final class Installer
 
     public static function ensureSchema(): void
     {
+        self::ensureCapabilities();
         if (get_option('e7_propostas_schema_version') === self::SCHEMA_VERSION) {
             return;
         }
@@ -55,6 +51,16 @@ final class Installer
         self::assertSchemaInstalled();
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
         self::scheduleRewriteFlush();
+    }
+
+    private static function ensureCapabilities(): void
+    {
+        $role = get_role('administrator');
+        if ($role) {
+            foreach (ProposalPostType::capabilities() as $capability) {
+                $role->add_cap($capability);
+            }
+        }
     }
 
     private static function scheduleRewriteFlush(): void
@@ -328,7 +334,9 @@ final class Installer
             }
         }
         $escaped = str_replace('`', '``', $table);
-        $wpdb->query("ALTER TABLE `$escaped` MODIFY `public_id` char(32) NOT NULL");
+        if ($wpdb->query("ALTER TABLE `$escaped` MODIFY `public_id` char(32) NOT NULL, MODIFY `invoice_number` varchar(64) NULL, MODIFY `customer_payload` longtext NOT NULL, MODIFY `supplier_payload` longtext NOT NULL, MODIFY `items_payload` longtext NOT NULL") === false) {
+            throw new \RuntimeException('Could not finalize invoice column constraints.');
+        }
     }
 
     /** @param array<string, mixed> $fallback */
@@ -393,6 +401,11 @@ final class Installer
             unset($index);
             $schema[$name] = [
                 'columns' => array_values(array_map(static fn (array $column): string => (string) $column['Field'], is_array($columns) ? $columns : [])),
+                'column_definitions' => array_column(array_map(static fn (array $column): array => [
+                    'name' => (string) $column['Field'],
+                    'nullable' => (string) $column['Null'] === 'YES',
+                    'type' => strtolower((string) $column['Type']),
+                ], is_array($columns) ? $columns : []), null, 'name'),
                 'indexes' => $indexes,
             ];
         }

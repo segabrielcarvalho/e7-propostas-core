@@ -55,7 +55,10 @@ final class InvoiceHtmlRenderer
             (string) ($supplier['postal_code'] ?? ''),
             (string) ($supplier['country'] ?? ''),
         ], static fn (string $value): bool => $value !== '');
-        $customerAddress = is_array($customer['registered_address'] ?? null) ? $customer['registered_address'] : [];
+        $billingAddress = is_array($customer['billing_address'] ?? null) ? $customer['billing_address'] : [];
+        $customerAddress = $billingAddress !== []
+            ? $billingAddress
+            : (is_array($customer['registered_address'] ?? null) ? $customer['registered_address'] : []);
         $customerLines = array_filter([
             (string) ($customerAddress['line1'] ?? ''),
             (string) ($customerAddress['line2'] ?? ''),

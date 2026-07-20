@@ -53,6 +53,22 @@ final class InvoiceArtifactTest extends TestCase
         self::assertStringContainsString('€92,233,720,368,547,758.07', $html);
     }
 
+    public function test_editorial_invoice_uses_the_frozen_billing_address(): void
+    {
+        $invoice = $this->invoice();
+        $invoice['customer_profile']['billing_address'] = [
+            'line1' => '2 Billing Quay', 'line2' => '', 'city' => 'Dublin',
+            'county' => '', 'eircode' => 'D02 X285', 'country_code' => 'IE',
+        ];
+
+        $html = (new InvoiceHtmlRenderer())->render($invoice, 'https://example.test/invoice/verify/' . $invoice['public_id'] . '/');
+
+        self::assertStringContainsString('2 Billing Quay', $html);
+        self::assertStringContainsString('D02 X285', $html);
+        self::assertStringNotContainsString('1 Main Street', $html);
+        self::assertStringNotContainsString('T12 X4P5', $html);
+    }
+
     public function test_complete_artifact_is_reused_without_rendering_signing_or_storing_again(): void
     {
         $invoice = $this->invoice() + [

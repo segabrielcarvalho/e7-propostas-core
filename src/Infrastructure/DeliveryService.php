@@ -25,13 +25,17 @@ final class DeliveryService
             if (! is_string($from) || ! is_email($from) || ! is_email($destination)) {
                 throw new \RuntimeException('SES sender or signer email is invalid.');
             }
+            $email = EmailTemplate::otp($code, $locale);
             $client = new SesV2Client(['version' => 'latest', 'region' => $region]);
             $result = $client->sendEmail([
                 'FromEmailAddress' => $from,
                 'Destination' => ['ToAddresses' => [$destination]],
                 'Content' => ['Simple' => [
-                    'Subject' => ['Data' => $locale === 'pt_BR' ? 'Código de aceite da proposta E7' : 'E7 proposal acceptance code', 'Charset' => 'UTF-8'],
-                    'Body' => ['Text' => ['Data' => $locale === 'pt_BR' ? "Seu código é $code. Ele expira em 10 minutos." : "Your code is $code. It expires in 10 minutes.", 'Charset' => 'UTF-8']],
+                    'Subject' => ['Data' => $email['subject'], 'Charset' => 'UTF-8'],
+                    'Body' => [
+                        'Text' => ['Data' => $email['text'], 'Charset' => 'UTF-8'],
+                        'Html' => ['Data' => $email['html'], 'Charset' => 'UTF-8'],
+                    ],
                 ]],
             ]);
             $ids[] = (string) ($result->get('MessageId') ?? 'ses');

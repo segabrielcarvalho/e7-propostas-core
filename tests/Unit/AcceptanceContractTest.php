@@ -156,6 +156,21 @@ final class AcceptanceContractTest extends TestCase
         self::assertStringContainsString("'AWS.SNS.SMS.SenderID'", $delivery);
     }
 
+    public function test_transactional_emails_send_the_branded_html_with_a_plain_text_fallback(): void
+    {
+        $delivery = file_get_contents(dirname(__DIR__, 2) . '/src/Infrastructure/DeliveryService.php');
+        $processor = file_get_contents(dirname(__DIR__, 2) . '/src/Infrastructure/ArtifactProcessor.php');
+
+        self::assertIsString($delivery);
+        self::assertIsString($processor);
+        self::assertStringContainsString('EmailTemplate::otp', $delivery);
+        self::assertStringContainsString("'Html' =>", $delivery);
+        self::assertStringContainsString("'Text' =>", $delivery);
+        self::assertStringContainsString('EmailTemplate::finalCopy', $processor);
+        self::assertStringContainsString('multipart/alternative', $processor);
+        self::assertStringContainsString('text/html; charset=UTF-8', $processor);
+    }
+
     public function test_otp_send_limits_survive_session_recreation_and_attempts_are_serialized(): void
     {
         $controller = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/RestController.php');

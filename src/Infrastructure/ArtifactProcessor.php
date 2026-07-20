@@ -144,8 +144,15 @@ final class ArtifactProcessor
             throw new \RuntimeException('SES sender is not configured.');
         }
         $recipients = array_values(array_unique(array_filter([(string) $record['acceptance']['signer_email'], (string) ($settings['copy_email'] ?? '')], 'is_email')));
+        $email = EmailTemplate::finalCopy((string) ($settings['locale'] ?? 'pt_BR'));
         $boundary = 'e7-' . bin2hex(random_bytes(12));
-        $raw = "From: E7 Company <$from>\r\nTo: " . implode(', ', $recipients) . "\r\nSubject: Signed E7 proposal\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"$boundary\"\r\n\r\n--$boundary\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nYour accepted proposal is attached.\r\n--$boundary\r\nContent-Type: application/pdf; name=proposal.pdf\r\nContent-Disposition: attachment; filename=proposal.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($pdf)) . "\r\n--$boundary--";
+        $alternativeBoundary = 'e7-alt-' . bin2hex(random_bytes(12));
+        $raw = "From: E7 Company <$from>\r\nTo: " . implode(', ', $recipients) . "\r\nSubject: " . $email['subject'] . "\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"$boundary\"\r\n\r\n"
+            . "--$boundary\r\nContent-Type: multipart/alternative; boundary=\"$alternativeBoundary\"\r\n\r\n"
+            . "--$alternativeBoundary\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($email['text']))
+            . "\r\n--$alternativeBoundary\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($email['html']))
+            . "\r\n--$alternativeBoundary--\r\n"
+            . "--$boundary\r\nContent-Type: application/pdf; name=proposal.pdf\r\nContent-Disposition: attachment; filename=proposal.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($pdf)) . "\r\n--$boundary--";
         $ses = new SesV2Client(['version' => 'latest', 'region' => $region]);
         $result = $ses->sendEmail(['FromEmailAddress' => $from, 'Destination' => ['ToAddresses' => $recipients], 'Content' => ['Raw' => ['Data' => $raw]]]);
         return (string) ($result->get('MessageId') ?? 'ses');

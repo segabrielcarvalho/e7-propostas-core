@@ -18,6 +18,15 @@ final class AcceptanceContractTest extends TestCase
         self::assertStringContainsString("'acceptance' => \$authorized ? \$acceptance : null", $routes);
     }
 
+    public function test_an_expired_accepted_proposal_can_create_a_fresh_password_session(): void
+    {
+        $repository = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/ProposalRepository.php');
+
+        self::assertIsString($repository);
+        self::assertSame(2, substr_count($repository, "\$row['status'] === 'active' && \$this->isVersionExpired(\$row)"));
+        self::assertStringNotContainsString("! is_array(\$row) || \$this->isVersionExpired(\$row)", $repository);
+    }
+
     public function testRendererUsesTheOfficialBrowserlessPdfPayload(): void
     {
         $source = file_get_contents(__DIR__ . '/../../src/Infrastructure/ArtifactProcessor.php');

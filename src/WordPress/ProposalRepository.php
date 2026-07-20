@@ -161,7 +161,7 @@ final class ProposalRepository
         if (! is_array($row) || ! in_array($row['status'], ['active', 'accepted'], true)) {
             return null;
         }
-        if ($this->isVersionExpired($row)) {
+        if ($row['status'] === 'active' && $this->isVersionExpired($row)) {
             return null;
         }
         return $row;
@@ -199,7 +199,7 @@ final class ProposalRepository
             "SELECT * FROM $versions WHERE post_id = %d AND status IN ('active','accepted') ORDER BY version_no DESC LIMIT 1",
             (int) $postId,
         ), ARRAY_A);
-        if (! is_array($row) || $this->isVersionExpired($row)) {
+        if (! is_array($row) || ($row['status'] === 'active' && $this->isVersionExpired($row))) {
             return null;
         }
 

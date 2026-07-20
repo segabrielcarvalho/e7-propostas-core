@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace E7Propostas\Infrastructure;
 
+use Aws\Exception\AwsException;
 use Aws\Kms\KmsClient;
 use Aws\S3\S3Client;
 
@@ -12,6 +13,8 @@ final class InvoiceFinalizer
     private readonly \Closure $environment;
     private readonly \Closure $pdfRenderer;
     private readonly \Closure $signer;
+    private readonly \Closure $signatureVerifier;
+    private readonly \Closure $objectReader;
     private readonly \Closure $objectWriter;
     private readonly \Closure $localWriter;
     private readonly \Closure $verificationUrl;
@@ -21,6 +24,8 @@ final class InvoiceFinalizer
         ?callable $environment = null,
         ?callable $pdfRenderer = null,
         ?callable $signer = null,
+        ?callable $signatureVerifier = null,
+        ?callable $objectReader = null,
         ?callable $objectWriter = null,
         ?callable $localWriter = null,
         ?callable $verificationUrl = null,
@@ -28,6 +33,8 @@ final class InvoiceFinalizer
         $this->environment = \Closure::fromCallable($environment ?? static fn (): string => function_exists('wp_get_environment_type') ? wp_get_environment_type() : 'production');
         $this->pdfRenderer = \Closure::fromCallable($pdfRenderer ?? [$this, 'renderPdf']);
         $this->signer = \Closure::fromCallable($signer ?? [$this, 'signHash']);
+        $this->signatureVerifier = \Closure::fromCallable($signatureVerifier ?? [$this, 'verifyHash']);
+        $this->objectReader = \Closure::fromCallable($objectReader ?? [$this, 'fetchStoredPdf']);
         $this->objectWriter = \Closure::fromCallable($objectWriter ?? [$this, 'storePdf']);
         $this->localWriter = \Closure::fromCallable($localWriter ?? [$this, 'writeLocalHtml']);
         $this->verificationUrl = \Closure::fromCallable($verificationUrl ?? static fn (string $publicId): string => function_exists('home_url') ? home_url('/invoice/verify/' . $publicId . '/') : 'https://localhost/invoice/verify/' . $publicId . '/');
@@ -47,6 +54,13 @@ final class InvoiceFinalizer
         $publicId = (string) ($invoice['public_id'] ?? '');
         if (! preg_match('/^[a-f0-9]{32}$/', $publicId)) {
             throw new \InvalidArgumentException('Invoice public ID is invalid.');
+        }
+        $key = 'invoices/' . $publicId . '.pdf';
+        if ($environment !== 'local') {
+            $remote = ($this->objectReader)($key);
+            if (is_array($remote)) {
+                return $this->recoverRemoteArtifact($invoice, $key, $remote);
+            }
         }
         $url = (string) ($this->verificationUrl)($publicId);
         $html = $this->htmlRenderer->render($invoice, $url);
@@ -72,12 +86,69 @@ final class InvoiceFinalizer
         if ($signature === '') {
             throw new \RuntimeException('KMS did not return an invoice signature.');
         }
-        $key = 'invoices/' . $publicId . '.pdf';
-        $artifactKey = (string) ($this->objectWriter)($key, $pdf);
+        $metadata = [
+            'public-id' => $publicId,
+            'snapshot-hash' => (string) $invoice['snapshot_hash'],
+            'artifact-hash' => $hash,
+            'signature-payload-hash' => $payloadHash,
+            'kms-signature' => $signature,
+            'issued-at' => $issuedAt,
+        ];
+        try {
+            $artifactKey = (string) ($this->objectWriter)($key, $pdf, $metadata);
+        } catch (\Throwable $writeError) {
+            $remote = ($this->objectReader)($key);
+            if (! is_array($remote)) {
+                throw $writeError;
+            }
+            return $this->recoverRemoteArtifact($invoice, $key, $remote);
+        }
         if ($artifactKey === '') {
             throw new \RuntimeException('Invoice artifact storage did not return an object key.');
         }
         return ['artifact_key' => $artifactKey, 'artifact_hash' => $hash, 'signature_payload_hash' => $payloadHash, 'kms_signature' => $signature, 'issued_at' => $issuedAt];
+    }
+
+    /** @param array<string, mixed> $invoice @param array<string, mixed> $remote @return array{artifact_key: string, artifact_hash: string, signature_payload_hash: string, kms_signature: string, issued_at: string} */
+    private function recoverRemoteArtifact(array $invoice, string $key, array $remote): array
+    {
+        $artifactKey = trim((string) ($remote['artifact_key'] ?? $key));
+        $body = $remote['body'] ?? null;
+        $rawMetadata = is_array($remote['metadata'] ?? null) ? $remote['metadata'] : [];
+        $metadata = [];
+        foreach ($rawMetadata as $name => $value) {
+            $metadata[str_replace('_', '-', strtolower((string) $name))] = trim((string) $value);
+        }
+        $issuedAt = trim((string) ($invoice['issued_at'] ?? $invoice['due_at'] ?? ''));
+        $publicId = (string) ($invoice['public_id'] ?? '');
+        $snapshotHash = (string) ($invoice['snapshot_hash'] ?? '');
+        if ($artifactKey !== $key
+            || ! is_string($body)
+            || ! str_starts_with($body, '%PDF-')
+            || ($metadata['public-id'] ?? '') !== $publicId
+            || ($metadata['snapshot-hash'] ?? '') !== $snapshotHash
+            || ($metadata['issued-at'] ?? '') !== $issuedAt) {
+            throw new \RuntimeException('Stored invoice artifact metadata is inconsistent.');
+        }
+        $artifactHash = hash('sha256', $body);
+        $payloadHash = strtolower((string) ($metadata['signature-payload-hash'] ?? ''));
+        $signature = (string) ($metadata['kms-signature'] ?? '');
+        if (($metadata['artifact-hash'] ?? '') !== $artifactHash
+            || ! preg_match('/^[a-f0-9]{64}$/', $payloadHash)
+            || $signature === '') {
+            throw new \RuntimeException('Stored invoice artifact metadata failed integrity validation.');
+        }
+        $expectedPayloadHash = InvoiceSignatureEnvelope::hash(array_merge($invoice, ['artifact_hash' => $artifactHash, 'issued_at' => $issuedAt]));
+        if (! hash_equals($expectedPayloadHash, $payloadHash) || ! ($this->signatureVerifier)($payloadHash, $signature)) {
+            throw new \RuntimeException('Stored invoice artifact metadata failed signature validation.');
+        }
+        return [
+            'artifact_key' => $key,
+            'artifact_hash' => $artifactHash,
+            'signature_payload_hash' => $payloadHash,
+            'kms_signature' => $signature,
+            'issued_at' => $issuedAt,
+        ];
     }
 
     /** @param array<string, mixed> $invoice @return array{artifact_key: string, artifact_hash: string, signature_payload_hash: string, kms_signature: ?string, issued_at: string}|null */
@@ -135,24 +206,76 @@ final class InvoiceFinalizer
         return base64_encode((string) $result->get('Signature'));
     }
 
-    private function storePdf(string $key, string $pdf): string
+    private function verifyHash(string $hash, string $encodedSignature): bool
     {
-        $bucket = getenv('E7_PROPOSTAS_S3_BUCKET');
+        $keyId = getenv('E7_PROPOSTAS_KMS_SIGNING_KEY_ID');
         $region = getenv('E7_AWS_REGION') ?: getenv('AWS_REGION');
+        $signature = base64_decode($encodedSignature, true);
+        if (! is_string($keyId) || $keyId === '' || ! is_string($region) || $region === '' || $signature === false) {
+            return false;
+        }
+        $result = (new KmsClient(['version' => 'latest', 'region' => $region]))->verify([
+            'KeyId' => $keyId,
+            'Message' => hex2bin($hash),
+            'MessageType' => 'DIGEST',
+            'Signature' => $signature,
+            'SigningAlgorithm' => 'RSASSA_PSS_SHA_256',
+        ]);
+        return $result->get('SignatureValid') === true;
+    }
+
+    /** @return array{artifact_key: string, body: string, metadata: array<string, string>}|null */
+    private function fetchStoredPdf(string $key): ?array
+    {
+        [$client, $bucket] = $this->s3();
+        try {
+            $head = $client->headObject(['Bucket' => $bucket, 'Key' => $key]);
+        } catch (AwsException $error) {
+            if ($error->getStatusCode() === 404 || in_array($error->getAwsErrorCode(), ['NoSuchKey', 'NotFound'], true)) {
+                return null;
+            }
+            throw $error;
+        }
+        $object = $client->getObject(['Bucket' => $bucket, 'Key' => $key]);
+        $metadata = $head->get('Metadata');
+        return [
+            'artifact_key' => $key,
+            'body' => (string) $object->get('Body'),
+            'metadata' => is_array($metadata) ? $metadata : [],
+        ];
+    }
+
+    /** @param array<string, string> $metadata */
+    private function storePdf(string $key, string $pdf, array $metadata): string
+    {
+        [$client, $bucket] = $this->s3();
         $retentionYears = filter_var(getenv('E7_PROPOSTAS_RETENTION_YEARS') ?: '7', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 20]]);
-        if (! is_string($bucket) || $bucket === '' || ! is_string($region) || $region === '' || ! is_int($retentionYears)) {
+        if (! is_int($retentionYears)) {
             throw new \RuntimeException('Invoice artifact storage is not configured.');
         }
-        $result = (new S3Client(['version' => 'latest', 'region' => $region]))->putObject([
+        $client->putObject([
             'Bucket' => $bucket,
             'Key' => $key,
             'Body' => $pdf,
+            'IfNoneMatch' => '*',
+            'Metadata' => $metadata,
             'ContentType' => 'application/pdf',
             'ServerSideEncryption' => 'aws:kms',
             'ObjectLockMode' => 'GOVERNANCE',
             'ObjectLockRetainUntilDate' => gmdate(DATE_ATOM, strtotime('+' . $retentionYears . ' years')),
         ]);
-        return $key . '#' . (string) ($result->get('VersionId') ?? '');
+        return $key;
+    }
+
+    /** @return array{S3Client, string} */
+    private function s3(): array
+    {
+        $bucket = getenv('E7_PROPOSTAS_S3_BUCKET');
+        $region = getenv('E7_AWS_REGION') ?: getenv('AWS_REGION');
+        if (! is_string($bucket) || $bucket === '' || ! is_string($region) || $region === '') {
+            throw new \RuntimeException('Invoice artifact storage is not configured.');
+        }
+        return [new S3Client(['version' => 'latest', 'region' => $region]), $bucket];
     }
 
     private function writeLocalHtml(string $publicId, string $html): string

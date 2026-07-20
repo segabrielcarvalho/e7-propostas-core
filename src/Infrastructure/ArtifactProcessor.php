@@ -136,6 +136,9 @@ final class ArtifactProcessor
             }
             $pdf = $this->fetchPersistedPdf($version, $bucket, $region);
         }
+        if (! $this->repository->claimFinalEmail((int) $job['version_id'])) {
+            return null;
+        }
         $providerId = $this->sendFinalEmail($acceptance, $pdf, $region);
         $this->repository->appendAudit((int) $job['version_id'], 'final_email.sent', ['provider_message_id' => $providerId]);
         return $providerId;

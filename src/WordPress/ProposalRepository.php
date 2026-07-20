@@ -12,6 +12,7 @@ use E7Propostas\Domain\SnapshotHasher;
 use E7Propostas\Domain\ShareCodeService;
 use E7Propostas\Domain\TokenService;
 use E7Propostas\Infrastructure\Crypto;
+use E7Propostas\Infrastructure\FinalEmailState;
 
 final class ProposalRepository
 {
@@ -500,6 +501,27 @@ final class ProposalRepository
         global $wpdb;
         $publicId = $wpdb->get_var($wpdb->prepare('SELECT public_id FROM ' . $this->table('e7_proposal_acceptances') . ' WHERE version_id = %d', $versionId));
         return is_string($publicId) ? $this->findAcceptance($publicId) : null;
+    }
+
+    public function claimFinalEmail(int $versionId): bool
+    {
+        global $wpdb;
+        $lock = $this->acquireAuditLock($versionId);
+        try {
+            $table = $this->table('e7_proposal_audit_events');
+            $rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT event_type FROM $table WHERE version_id = %d AND event_type IN ('final_email.claimed','final_email.sent') ORDER BY id ASC",
+                $versionId,
+            ), ARRAY_A);
+            $state = FinalEmailState::fromEvents(is_array($rows) ? $rows : []);
+            if (! $state->claim()) {
+                return false;
+            }
+            $this->appendAudit($versionId, 'final_email.claimed', ['claimed_at' => current_time('mysql', true)], true);
+            return true;
+        } finally {
+            $this->releaseAuditLock($lock);
+        }
     }
 
     /** @param array<string, mixed> $payload */

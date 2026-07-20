@@ -6,18 +6,40 @@ namespace E7Propostas\Infrastructure;
 
 final class ArtifactState
 {
+    public const ABSENT = 'absent';
+    public const COMPLETE = 'complete';
+    public const PARTIAL = 'partial';
+
+    /** @param array<string, mixed> $version */
+    public static function state(array $version): string
+    {
+        $key = trim((string) ($version['artifact_key'] ?? ''));
+        $hash = trim((string) ($version['artifact_hash'] ?? ''));
+        $signature = trim((string) ($version['kms_signature'] ?? ''));
+
+        if ($key === '' && $hash === '' && $signature === '') {
+            return self::ABSENT;
+        }
+        if ($key !== '' && preg_match('/^[a-f0-9]{64}$/', $hash) === 1 && $signature !== '') {
+            return self::COMPLETE;
+        }
+        return self::PARTIAL;
+    }
+
     /** @param array<string, mixed> $version */
     public static function isPersisted(array $version): bool
     {
-        return trim((string) ($version['artifact_key'] ?? '')) !== ''
-            && preg_match('/^[a-f0-9]{64}$/', (string) ($version['artifact_hash'] ?? '')) === 1
-            && trim((string) ($version['kms_signature'] ?? '')) !== '';
+        return self::state($version) === self::COMPLETE;
     }
 
     /** @param array<string, mixed> $version */
     public static function shouldGenerate(array $version): bool
     {
-        return ! self::isPersisted($version);
+        return match (self::state($version)) {
+            self::ABSENT => true,
+            self::COMPLETE => false,
+            self::PARTIAL => throw new \RuntimeException('Artifact state is partial and cannot be regenerated safely.'),
+        };
     }
 
     /** @param list<array<string, mixed>> $events */

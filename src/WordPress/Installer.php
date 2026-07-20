@@ -6,7 +6,7 @@ namespace E7Propostas\WordPress;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.5.1';
+    public const SCHEMA_VERSION = '1.5.2';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -241,10 +241,15 @@ final class Installer
         if (! SchemaRequirements::hasIndex($schema, 'acceptances', 'version_idempotency', ['version_id', 'idempotency_key'], true)) {
             throw new \RuntimeException('Composite acceptance idempotency index is not ready.');
         }
-        $table = $wpdb->prefix . 'e7_proposal_acceptances';
-        $legacy = $wpdb->get_var($wpdb->prepare("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = 'idempotency_key' LIMIT 1", $table));
-        if ($legacy === 'idempotency_key') {
-            $wpdb->query("ALTER TABLE `$table` DROP INDEX `idempotency_key`");
+        $table = str_replace('`', '``', $wpdb->prefix . 'e7_proposal_acceptances');
+        if (isset($schema['acceptances']['indexes']['idempotency_key'])) {
+            if ($wpdb->query("ALTER TABLE `$table` DROP INDEX `idempotency_key`") === false) {
+                throw new \RuntimeException('Could not remove the legacy acceptance idempotency index.');
+            }
+        }
+        $schema = self::inspectSchema();
+        if (isset($schema['acceptances']['indexes']['idempotency_key'])) {
+            throw new \RuntimeException('Legacy acceptance idempotency index is still present.');
         }
     }
 

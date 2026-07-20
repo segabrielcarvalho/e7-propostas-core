@@ -11,6 +11,9 @@ final class SchemaRequirements
     {
         self::assertColumns($schema, 'acceptances', ['business_payload']);
         self::assertIndex($schema, 'acceptances', 'version_idempotency', ['version_id', 'idempotency_key'], true);
+        if (isset($schema['acceptances']['indexes']['idempotency_key'])) {
+            throw new \RuntimeException('Legacy acceptance idempotency index is still present.');
+        }
 
         self::assertColumns($schema, 'invoices', ['id', 'acceptance_id', 'version_id', 'invoice_number', 'currency', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'issued_at', 'sent_at', 'paid_at', 'voided_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'kms_signature', 'provider_message_id', 'replacement_for_id', 'created_at', 'updated_at']);
         self::assertIndex($schema, 'invoices', 'acceptance_id', ['acceptance_id'], false);

@@ -44,6 +44,33 @@ final class SchemaRequirementsTest extends TestCase
         SchemaRequirements::assertReady($schema);
     }
 
+    public function test_legacy_idempotency_index_is_rejected_even_with_the_composite_present(): void
+    {
+        self::assertTrue(class_exists(SchemaRequirements::class), 'SchemaRequirements must exist.');
+        $schema = $this->completeSchema();
+        $schema['acceptances']['indexes']['idempotency_key'] = ['unique' => true, 'columns' => ['idempotency_key']];
+        $this->expectException(\RuntimeException::class);
+        SchemaRequirements::assertReady($schema);
+    }
+
+    public function test_installer_checks_the_legacy_drop_and_reinspects_before_updating_the_version(): void
+    {
+        $source = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/Installer.php');
+        self::assertIsString($source);
+        $start = strpos($source, 'private static function migrateAcceptanceIdempotencyIndex');
+        $end = strpos($source, 'private static function migrateInvoiceAcceptanceIndex');
+        self::assertIsInt($start);
+        self::assertIsInt($end);
+        $migration = substr($source, $start, $end - $start);
+        self::assertStringContainsString('DROP INDEX `idempotency_key`', $migration);
+        self::assertStringContainsString('=== false', $migration);
+        self::assertGreaterThanOrEqual(2, substr_count($migration, 'self::inspectSchema()'));
+        self::assertLessThan(
+            strpos($source, "update_option('e7_propostas_schema_version'"),
+            strpos($source, 'self::assertSchemaInstalled()'),
+        );
+    }
+
     /** @return array<string, array<string, mixed>> */
     private function completeSchema(): array
     {

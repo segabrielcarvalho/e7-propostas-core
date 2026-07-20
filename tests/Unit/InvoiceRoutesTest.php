@@ -29,6 +29,16 @@ final class InvoiceRoutesTest extends TestCase
         }
     }
 
+    public function test_public_verification_formats_minor_units_without_floating_point_precision_loss(): void
+    {
+        $invoice = $this->invoice();
+        $invoice['total_minor'] = PHP_INT_MAX;
+
+        $record = InvoiceRoutePolicy::verificationRecord($invoice, true);
+
+        self::assertSame('92233720368547758.07', $record['total']);
+    }
+
     public function test_cancelled_invoice_stays_verifiable_and_points_to_an_issued_replacement(): void
     {
         $invoice = $this->invoice();

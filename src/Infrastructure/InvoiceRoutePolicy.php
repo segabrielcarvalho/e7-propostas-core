@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace E7Propostas\Infrastructure;
 
+use E7Propostas\Domain\MoneyDecimal;
+
 final class InvoiceRoutePolicy
 {
     /** @param array<string, mixed> $invoice @return array<string, bool|int|string|null> */
@@ -22,7 +24,7 @@ final class InvoiceRoutePolicy
             'customer_legal_name' => (string) ($customer['legal_name'] ?? ''),
             'issued_at' => (string) ($invoice['issued_at'] ?? ''),
             'currency' => (string) ($invoice['currency'] ?? ''),
-            'total' => number_format((int) ($invoice['total_minor'] ?? 0) / 100, 2, '.', ''),
+            'total' => MoneyDecimal::formatInput((int) ($invoice['total_minor'] ?? 0)),
             'status' => $status,
             'artifact_hash' => (string) ($invoice['artifact_hash'] ?? ''),
             'signature_verified' => $signatureVerified,

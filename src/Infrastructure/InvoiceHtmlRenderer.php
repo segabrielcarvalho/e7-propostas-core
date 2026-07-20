@@ -8,6 +8,7 @@ use BaconQrCode\Renderer\Image\SvgImageBackEnd;
 use BaconQrCode\Renderer\ImageRenderer;
 use BaconQrCode\Renderer\RendererStyle\RendererStyle;
 use BaconQrCode\Writer;
+use E7Propostas\Domain\MoneyDecimal;
 
 final class InvoiceHtmlRenderer
 {
@@ -82,13 +83,7 @@ final class InvoiceHtmlRenderer
 
     private static function money(int $minor): string
     {
-        $major = (string) intdiv($minor, 100);
-        $grouped = preg_replace('/\B(?=(\d{3})+(?!\d))/', ',', $major);
-        if (! is_string($grouped)) {
-            throw new \RuntimeException('Invoice amount could not be formatted.');
-        }
-
-        return '€' . $grouped . '.' . str_pad((string) ($minor % 100), 2, '0', STR_PAD_LEFT);
+        return '€' . MoneyDecimal::formatDisplay($minor);
     }
 
     private static function date(string $mysql): string

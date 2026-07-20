@@ -4,9 +4,10 @@
   "license": "proprietary",
   "type": "wordpress-plugin",
   "require": {
-    "php": ">=8.2",
     "aws/aws-sdk-php": "^3.337",
-    "bacon/bacon-qr-code": "^3.0"
+    "bacon/bacon-qr-code": "^3.0",
+    "ext-sodium": "*",
+    "php": ">=8.2"
   },
   "require-dev": {
     "phpunit/phpunit": "^11.5"

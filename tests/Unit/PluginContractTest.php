@@ -24,6 +24,13 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString('E7Propostas\\WordPress\\Plugin', $plugin);
     }
 
+    public function test_declares_the_sodium_runtime_requirement_for_encrypted_business_data(): void
+    {
+        $composer = json_decode($this->read('composer.json'), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame('*', $composer['require']['ext-sodium'] ?? null);
+    }
+
     public function test_registers_a_private_gutenberg_proposal_type(): void
     {
         $postType = $this->read('src/WordPress/ProposalPostType.php');

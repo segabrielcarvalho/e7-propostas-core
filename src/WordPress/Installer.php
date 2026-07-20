@@ -6,7 +6,7 @@ namespace E7Propostas\WordPress;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.4.0';
+    public const SCHEMA_VERSION = '1.5.0';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -16,6 +16,7 @@ final class Installer
         }
 
         self::installTables();
+        self::assertSchemaInstalled();
         update_option('e7_propostas_core_enabled', '1', false);
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
 
@@ -42,6 +43,7 @@ final class Installer
         }
         self::installTables();
         self::migrateAcceptanceIdempotencyIndex();
+        self::assertSchemaInstalled();
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
         self::scheduleRewriteFlush();
     }
@@ -137,6 +139,7 @@ final class Installer
             signer_company varchar(190) NOT NULL DEFAULT '',
             signer_email varchar(254) NOT NULL DEFAULT '',
             signer_phone varchar(32) NOT NULL DEFAULT '',
+            business_payload longtext NULL,
             consent_text text NOT NULL,
             accepted_at datetime NOT NULL,
             ip_address varchar(45) NOT NULL DEFAULT '',
@@ -146,6 +149,45 @@ final class Installer
             UNIQUE KEY version_id (version_id),
             UNIQUE KEY public_id (public_id),
             UNIQUE KEY version_idempotency (version_id,idempotency_key)
+        ) $charset;";
+        $schemas[] = "CREATE TABLE {$prefix}e7_proposal_invoices (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            acceptance_id bigint unsigned NOT NULL,
+            version_id bigint unsigned NOT NULL,
+            invoice_number varchar(64) NOT NULL,
+            currency char(3) NOT NULL DEFAULT 'EUR',
+            items_payload longtext NOT NULL,
+            subtotal_minor bigint unsigned NOT NULL,
+            total_minor bigint unsigned NOT NULL,
+            status varchar(20) NOT NULL DEFAULT 'pending',
+            issued_at datetime NULL,
+            sent_at datetime NULL,
+            paid_at datetime NULL,
+            voided_at datetime NULL,
+            replaced_at datetime NULL,
+            due_at datetime NULL,
+            artifact_key text NULL,
+            artifact_hash char(64) NULL,
+            kms_signature longtext NULL,
+            provider_message_id varchar(255) NULL,
+            replacement_for_id bigint unsigned NULL,
+            created_at datetime NOT NULL,
+            updated_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY acceptance_id (acceptance_id),
+            UNIQUE KEY invoice_number (invoice_number),
+            UNIQUE KEY replacement_for_id (replacement_for_id),
+            KEY version_status (version_id,status)
+        ) $charset;";
+        $schemas[] = "CREATE TABLE {$prefix}e7_proposal_invoice_sequences (
+            id bigint unsigned NOT NULL AUTO_INCREMENT,
+            sequence_scope varchar(32) NOT NULL,
+            sequence_year smallint unsigned NOT NULL,
+            current_value bigint unsigned NOT NULL DEFAULT 0,
+            created_at datetime NOT NULL,
+            updated_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY sequence_scope_year (sequence_scope,sequence_year)
         ) $charset;";
         $schemas[] = "CREATE TABLE {$prefix}e7_proposal_audit_events (
             id bigint unsigned NOT NULL AUTO_INCREMENT,
@@ -196,6 +238,24 @@ final class Installer
         $legacy = $wpdb->get_var($wpdb->prepare("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = 'idempotency_key' LIMIT 1", $table));
         if ($legacy === 'idempotency_key') {
             $wpdb->query("ALTER TABLE `$table` DROP INDEX `idempotency_key`");
+        }
+    }
+
+    private static function assertSchemaInstalled(): void
+    {
+        global $wpdb;
+        foreach (['e7_proposal_invoices', 'e7_proposal_invoice_sequences'] as $suffix) {
+            $table = $wpdb->prefix . $suffix;
+            $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table)));
+            if ($found !== $table) {
+                throw new \RuntimeException('Required proposal schema table was not installed: ' . $suffix);
+            }
+        }
+
+        $acceptances = str_replace('`', '``', $wpdb->prefix . 'e7_proposal_acceptances');
+        $column = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM `$acceptances` LIKE %s", 'business_payload'));
+        if ($column !== 'business_payload') {
+            throw new \RuntimeException('Required acceptance business_payload column was not installed.');
         }
     }
 }

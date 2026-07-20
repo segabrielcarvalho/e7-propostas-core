@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace E7Propostas\WordPress;
 
 use E7Propostas\Domain\AuditChain;
+use E7Propostas\Domain\InvoiceItems;
 use E7Propostas\Domain\OtpDestination;
 use E7Propostas\Domain\SnapshotHasher;
 use E7Propostas\Domain\ShareCodeService;
@@ -41,12 +42,15 @@ final class ProposalRepository
         if ($phone !== '') {
             $phone = OtpDestination::from('sms', $phone)->value;
         }
+        $invoiceItems = InvoiceItems::normalize($settings['invoice_items'] ?? []);
         $payload = [
             'client_name' => sanitize_text_field((string) ($settings['client_name'] ?? '')),
             'client_email' => $email,
             'client_phone' => $phone,
             'client_company' => sanitize_text_field((string) ($settings['client_company'] ?? '')),
             'copy_email' => sanitize_email((string) ($settings['copy_email'] ?? '')),
+            'invoice_items' => $invoiceItems,
+            'invoice_total_minor' => InvoiceItems::total($invoiceItems),
         ];
         $expiresAt = $this->sanitizeDate((string) ($settings['expires_at'] ?? ''));
         $locale = in_array(($settings['locale'] ?? ''), ['pt_BR', 'en_IE'], true) ? (string) $settings['locale'] : 'pt_BR';
@@ -92,6 +96,11 @@ final class ProposalRepository
         $settings = $this->getSettings($post->ID);
         if (($settings['password_hash'] ?? '') === '') {
             return null;
+        }
+        $locale = (string) ($settings['locale'] ?? 'pt_BR');
+        $currency = (string) ($settings['currency'] ?? 'BRL');
+        if (($locale === 'en_IE' && $currency === 'EUR') && empty($settings['invoice_items'])) {
+            throw new \InvalidArgumentException('Irish EUR proposals require at least one invoice item before publishing.');
         }
 
         $this->ensureShareCode($post->ID);
@@ -363,8 +372,8 @@ final class ProposalRepository
         return is_array($row) ? $row : null;
     }
 
-    /** @param array<string, string> $signer @return array<string, mixed> */
-    public function accept(int $versionId, int $otpId, int $otpAttempts, string $idempotencyKey, array $signer, string $consent, string $ip, string $userAgent): array
+    /** @param array<string, string> $signer @param array<string, mixed>|null $businessProfile @return array<string, mixed> */
+    public function accept(int $versionId, ?int $otpId, ?int $otpAttempts, string $idempotencyKey, array $signer, string $consent, string $ip, string $userAgent, ?array $businessProfile = null, bool $otpRequired = true): array
     {
         global $wpdb;
         $versions = $this->table('e7_proposal_versions');
@@ -381,18 +390,27 @@ final class ProposalRepository
             if (! is_array($version) || $version['status'] !== 'active' || $this->isVersionExpired($version)) {
                 throw new \DomainException('Proposal is not available for acceptance.');
             }
-            $consumed = $wpdb->query($wpdb->prepare(
-                'UPDATE ' . $this->table('e7_proposal_otps') . ' SET consumed_at = %s WHERE id = %d AND attempts = %d AND consumed_at IS NULL',
-                current_time('mysql', true),
-                $otpId,
-                $otpAttempts,
-            ));
-            if ($consumed !== 1) {
-                throw new \DomainException('Could not consume OTP atomically.');
+            if ($otpRequired) {
+                if ($otpId === null || $otpAttempts === null) {
+                    throw new \DomainException('OTP details are required.');
+                }
+                $consumed = $wpdb->query($wpdb->prepare(
+                    'UPDATE ' . $this->table('e7_proposal_otps') . ' SET consumed_at = %s WHERE id = %d AND attempts = %d AND consumed_at IS NULL',
+                    current_time('mysql', true),
+                    $otpId,
+                    $otpAttempts,
+                ));
+                if ($consumed !== 1) {
+                    throw new \DomainException('Could not consume OTP atomically.');
+                }
             }
             $publicId = bin2hex(random_bytes(16));
             $acceptedAt = current_time('mysql', true);
-            $this->appendAudit($versionId, 'otp.verified', ['otp_id' => $otpId], true);
+            if ($otpRequired) {
+                $this->appendAudit($versionId, 'otp.verified', ['otp_id' => $otpId], true);
+            } else {
+                $this->appendAudit($versionId, 'authentication.verified', ['method' => 'password_session'], true);
+            }
             $auditHash = $this->appendAudit($versionId, 'proposal.accepted', [
                 'document_hash' => $version['document_hash'],
                 'accepted_at' => $acceptedAt,
@@ -408,6 +426,7 @@ final class ProposalRepository
                 'signer_company' => $signer['company'],
                 'signer_email' => $signer['email'],
                 'signer_phone' => $signer['phone'],
+                'business_payload' => $businessProfile === null ? null : $this->crypto->seal((string) wp_json_encode($businessProfile)),
                 'consent_text' => $consent,
                 'accepted_at' => $acceptedAt,
                 'ip_address' => $ip,

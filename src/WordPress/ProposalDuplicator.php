@@ -88,6 +88,7 @@ final class ProposalDuplicator
                 'locale' => (string) ($settings['locale'] ?? 'pt_BR'),
                 'currency' => (string) ($settings['currency'] ?? 'BRL'),
                 'otp_policy' => (string) ($settings['otp_policy'] ?? 'email'),
+                'invoice_items' => is_array($settings['invoice_items'] ?? null) ? $settings['invoice_items'] : [],
             ], null);
         } catch (\Throwable $error) {
             wp_delete_post((int) $newId, true);

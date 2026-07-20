@@ -15,7 +15,12 @@ final class SnapshotPublisher
         if ($post->post_type !== 'e7_proposal' || $post->post_status !== 'publish' || wp_is_post_autosave($postId) || wp_is_post_revision($postId)) {
             return;
         }
-        $version = $this->repository->publish($post);
+        try {
+            $version = $this->repository->publish($post);
+        } catch (\InvalidArgumentException $error) {
+            set_transient('e7_proposal_admin_error_' . get_current_user_id(), $error->getMessage(), 60);
+            return;
+        }
         if ($version === null) {
             set_transient('e7_proposal_admin_error_' . get_current_user_id(), __('Defina uma senha antes de publicar. Propostas aceitas devem ser duplicadas.', 'e7-propostas'), 60);
         }

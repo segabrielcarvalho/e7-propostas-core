@@ -187,13 +187,14 @@ final class ProposalMigrationCommand
         ];
     }
 
-    /** @param array<string, mixed> $settings @return array<string, string> */
+    /** @param array<string, mixed> $settings @return array<string, mixed> */
     private function safeSettings(array $settings): array
     {
         $safe = [];
         foreach (['client_name', 'client_email', 'client_phone', 'client_company', 'copy_email', 'expires_at', 'locale', 'currency', 'otp_policy'] as $key) {
             $safe[$key] = is_scalar($settings[$key] ?? null) ? (string) $settings[$key] : '';
         }
+        $safe['invoice_items'] = is_array($settings['invoice_items'] ?? null) ? $settings['invoice_items'] : [];
         return $safe;
     }
 }

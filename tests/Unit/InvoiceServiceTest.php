@@ -163,6 +163,26 @@ final class InvoiceServiceTest extends TestCase
         self::assertContains('invoice.issued', array_column($store->audits, 'type'));
     }
 
+    public function test_finalizer_persists_artifact_before_the_revalidated_issued_transition(): void
+    {
+        $store = new InMemoryInvoiceStore($this->context());
+        $store->invoice = $store->createDraft([
+            'acceptance_id' => 41, 'version_id' => 5, 'currency' => 'EUR',
+            'customer_profile' => $this->profile(), 'supplier_profile' => [],
+            'items' => $this->items(), 'total_minor' => 127500,
+        ]);
+        $store->invoice['status'] = 'processing';
+        $store->invoice['invoice_number'] = 'E7-2026-4821';
+
+        (new InvoiceService($store))->markIssued(10, [
+            'artifact_key' => 'invoices/example.pdf#v1',
+            'artifact_hash' => str_repeat('a', 64),
+            'kms_signature' => 'signature',
+        ]);
+
+        self::assertSame(['persist', 'issued'], $store->artifactEvents);
+    }
+
     public function test_worker_invoice_read_rejects_a_transplanted_snapshot_ciphertext(): void
     {
         $store = new InMemoryInvoiceStore($this->context());
@@ -314,6 +334,8 @@ final class InMemoryInvoiceStore implements InvoiceStore
     public bool $failEnqueue = false;
     public bool $integrityValid = true;
     public int $atomicCalls = 0;
+    /** @var list<string> */
+    public array $artifactEvents = [];
 
     /** @param array<string, mixed> $context */
     public function __construct(private array $context)
@@ -348,7 +370,15 @@ final class InMemoryInvoiceStore implements InvoiceStore
     public function markIssued(int $invoiceId, array $artifact): array
     {
         if (! $this->integrityValid) { throw new \DomainException('Invoice snapshot integrity check failed.'); }
+        $this->artifactEvents[] = 'issued';
         $this->invoice = array_merge($this->invoice, $artifact, ['status' => 'issued']);
+        return $this->invoice;
+    }
+    public function persistArtifact(int $invoiceId, array $artifact): array
+    {
+        if (! $this->integrityValid) { throw new \DomainException('Invoice snapshot integrity check failed.'); }
+        $this->artifactEvents[] = 'persist';
+        $this->invoice = array_merge($this->invoice, $artifact);
         return $this->invoice;
     }
     public function beginRetry(int $invoiceId): array { $this->invoice['status'] = 'processing'; return $this->invoice; }

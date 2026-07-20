@@ -159,11 +159,13 @@ final class InvoiceService
         if ($key === '' || ! preg_match('/^[a-f0-9]{64}$/', $hash)) {
             throw new \InvalidArgumentException('Issued invoice artifact evidence is invalid.');
         }
-        $issued = $this->store->markIssued($invoiceId, [
+        $evidence = [
             'artifact_key' => $key,
             'artifact_hash' => $hash,
             'kms_signature' => isset($artifact['kms_signature']) ? (string) $artifact['kms_signature'] : null,
-        ]);
+        ];
+        $this->store->persistArtifact($invoiceId, $evidence);
+        $issued = $this->store->markIssued($invoiceId, []);
         $this->store->appendAudit((int) $invoice['version_id'], 'invoice.issued', [
             'invoice_id' => $invoiceId,
             'invoice_number' => (string) $invoice['invoice_number'],

@@ -7,12 +7,24 @@ namespace E7Propostas\Infrastructure;
 use Aws\Kms\KmsClient;
 use Aws\S3\S3Client;
 use Aws\SesV2\SesV2Client;
+use E7Propostas\WordPress\InvoiceService;
 use E7Propostas\WordPress\ProposalRepository;
 
 final class ArtifactProcessor
 {
-    public function __construct(private readonly ProposalRepository $repository, private readonly FeatureFlags $features)
-    {
+    private readonly ArtifactJobDispatcher $dispatcher;
+
+    public function __construct(
+        private readonly ProposalRepository $repository,
+        private readonly FeatureFlags $features,
+        private readonly InvoiceService $invoiceService,
+        private readonly InvoiceFinalizer $invoiceFinalizer,
+    ) {
+        $this->dispatcher = new ArtifactJobDispatcher(
+            $this->finalizeAcceptance(...),
+            $this->finalizeInvoice(...),
+            $this->invoiceService->markFinalizationFailed(...),
+        );
     }
 
     public function runDue(): int
@@ -21,20 +33,26 @@ final class ArtifactProcessor
         $jobs = $wpdb->prefix . 'e7_proposal_jobs';
         $now = current_time('mysql', true);
         $stale = gmdate('Y-m-d H:i:s', time() - 15 * MINUTE_IN_SECONDS);
-        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM $jobs WHERE job_type='finalize_acceptance' AND ((status IN ('pending','retry') AND next_run_at <= %s) OR (status='processing' AND locked_at < %s)) ORDER BY id ASC LIMIT 5", $now, $stale), ARRAY_A);
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM $jobs WHERE (job_type='finalize_acceptance' OR job_type='finalize_invoice') AND ((status IN ('pending','retry') AND next_run_at <= %s) OR (status='processing' AND locked_at < %s)) ORDER BY id ASC LIMIT 5", $now, $stale), ARRAY_A);
         $processed = 0;
         foreach (is_array($rows) ? $rows : [] as $job) {
-            $claimed = $wpdb->query($wpdb->prepare("UPDATE $jobs SET status='processing', locked_at=%s, updated_at=%s WHERE id=%d AND job_type='finalize_acceptance' AND (status IN ('pending','retry') OR (status='processing' AND locked_at < %s))", $now, $now, (int) $job['id'], $stale));
+            $claimed = $wpdb->query($wpdb->prepare("UPDATE $jobs SET status='processing', locked_at=%s, updated_at=%s WHERE id=%d AND job_type=%s AND (status IN ('pending','retry') OR (status='processing' AND locked_at < %s))", $now, $now, (int) $job['id'], (string) $job['job_type'], $stale));
             if ($claimed !== 1) {
                 continue;
             }
             try {
-                $providerId = $this->finalize($job);
+                $providerId = $this->dispatcher->dispatch($job);
                 $wpdb->update($jobs, ['status' => 'completed', 'updated_at' => current_time('mysql', true), 'last_error' => null, 'provider_message_id' => $providerId], ['id' => (int) $job['id']]);
             } catch (\Throwable $error) {
                 $attempts = (int) $job['attempts'] + 1;
+                $terminal = $attempts >= 8;
+                try {
+                    $this->dispatcher->recordFailure($job, $error, $terminal);
+                } catch (\Throwable $failureError) {
+                    $error = new \RuntimeException($error->getMessage() . ' Invoice failure state: ' . $failureError->getMessage(), 0, $error);
+                }
                 $wpdb->update($jobs, [
-                    'status' => $attempts >= 8 ? 'failed' : 'retry',
+                    'status' => $terminal ? 'failed' : 'retry',
                     'attempts' => $attempts,
                     'next_run_at' => gmdate('Y-m-d H:i:s', time() + min(21600, 60 * (2 ** $attempts))),
                     'updated_at' => current_time('mysql', true),
@@ -47,10 +65,9 @@ final class ArtifactProcessor
     }
 
     /** @param array<string, mixed> $job */
-    private function finalize(array $job): ?string
+    private function finalizeAcceptance(array $job, array $payload): ?string
     {
         global $wpdb;
-        $payload = json_decode((string) $job['payload'], true, 512, JSON_THROW_ON_ERROR);
         $acceptance = $this->repository->findAcceptance((string) $payload['public_id']);
         if (! is_array($acceptance)) {
             throw new \RuntimeException('Acceptance no longer exists.');
@@ -142,6 +159,24 @@ final class ArtifactProcessor
         $providerId = $this->sendFinalEmail($acceptance, $pdf, $region);
         $this->repository->appendAudit((int) $job['version_id'], 'final_email.sent', ['provider_message_id' => $providerId]);
         return $providerId;
+    }
+
+    /** @param array<string, mixed> $job @param array{invoice_id: int, public_id: string} $payload */
+    private function finalizeInvoice(array $job, array $payload): ?string
+    {
+        $invoice = $this->invoiceService->invoice($payload['invoice_id']);
+        if (! hash_equals($payload['public_id'], (string) ($invoice['public_id'] ?? ''))) {
+            throw new \DomainException('Invoice job identity does not match its immutable record.');
+        }
+        if (($invoice['status'] ?? null) === 'issued') {
+            return null;
+        }
+        if (($invoice['status'] ?? null) !== 'processing') {
+            throw new \DomainException('Invoice job can finalize only a processing invoice.');
+        }
+        $artifact = $this->invoiceFinalizer->finalize($invoice);
+        $this->invoiceService->markIssued($payload['invoice_id'], $artifact);
+        return wp_get_environment_type() === 'local' ? 'local-invoice-evidence' : null;
     }
 
     /** @param array<string, mixed> $version */

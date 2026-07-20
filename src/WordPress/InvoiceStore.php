@@ -21,6 +21,8 @@ interface InvoiceStore
     /** Atomically reserves the number, transitions to processing and persists one finalize_invoice job. @return array<string, mixed> */
     public function issueAndEnqueue(int $invoiceId): array;
     public function markFailed(int $invoiceId, string $message): void;
+    /** Persists immutable artifact evidence while the invoice is still processing. @param array<string, string|null> $artifact @return array<string, mixed> */
+    public function persistArtifact(int $invoiceId, array $artifact): array;
     /** @param array<string, string|null> $artifact @return array<string, mixed> */
     public function markIssued(int $invoiceId, array $artifact): array;
     /** Atomically transitions a failed invoice and resets its single finalize_invoice job. @return array<string, mixed> */

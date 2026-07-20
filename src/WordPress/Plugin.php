@@ -16,6 +16,7 @@ use E7Propostas\Infrastructure\ArtifactDownload;
 use E7Propostas\Infrastructure\Crypto;
 use E7Propostas\Infrastructure\DeliveryService;
 use E7Propostas\Infrastructure\FeatureFlags;
+use E7Propostas\Infrastructure\InvoiceFinalizer;
 
 final class Plugin
 {
@@ -55,7 +56,7 @@ final class Plugin
             $publisher = new SnapshotPublisher($repository);
             $routes = new PublicRoutes($repository, $artifactVerifier, new ArtifactDownload(), $features);
             $rest = new RestController($repository, $passwords, new OtpService(wp_salt('logged_in')), new DeliveryService(), $artifactVerifier, $features);
-            $artifacts = new ArtifactProcessor($repository, $features);
+            $artifacts = new ArtifactProcessor($repository, $features, $invoiceService, new InvoiceFinalizer());
             $migration = new ProposalMigrationCommand($repository, $passwords);
 
             add_action('init', [ProposalPostType::class, 'register']);

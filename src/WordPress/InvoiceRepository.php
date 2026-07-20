@@ -259,6 +259,49 @@ final class InvoiceRepository implements InvoiceStore
         ], ['id' => $invoiceId, 'status' => 'processing']));
     }
 
+    public function persistArtifact(int $invoiceId, array $artifact): array
+    {
+        global $wpdb;
+        return $this->withLock('e7-invoice-record-' . $invoiceId, function () use ($wpdb, $invoiceId, $artifact): array {
+            $table = $this->table('e7_proposal_invoices');
+            $key = trim((string) ($artifact['artifact_key'] ?? ''));
+            $hash = strtolower(trim((string) ($artifact['artifact_hash'] ?? '')));
+            $signature = isset($artifact['kms_signature']) && $artifact['kms_signature'] !== '' ? (string) $artifact['kms_signature'] : null;
+            if ($key === '' || ! preg_match('/^[a-f0-9]{64}$/', $hash)) {
+                throw new \InvalidArgumentException('Invoice artifact evidence is invalid.');
+            }
+            $wpdb->query('START TRANSACTION');
+            try {
+                $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d FOR UPDATE", $invoiceId), ARRAY_A);
+                if (! is_array($row) || $row['status'] !== 'processing') {
+                    throw new \DomainException('Only a processing invoice can persist an artifact.');
+                }
+                $this->assertSnapshotIntegrity($row);
+                $existingKey = trim((string) ($row['artifact_key'] ?? ''));
+                $existingHash = strtolower(trim((string) ($row['artifact_hash'] ?? '')));
+                $existingSignature = isset($row['kms_signature']) && $row['kms_signature'] !== '' ? (string) $row['kms_signature'] : null;
+                if ($existingKey !== '' || $existingHash !== '' || $existingSignature !== null) {
+                    if ($existingKey !== $key || ! hash_equals($existingHash, $hash) || $existingSignature !== $signature) {
+                        throw new \DomainException('Conflicting or partial invoice artifact evidence already exists.');
+                    }
+                    $wpdb->query('COMMIT');
+                    return $this->hydrate($row);
+                }
+                $this->mustWrite($wpdb->update($table, [
+                    'artifact_key' => $key,
+                    'artifact_hash' => $hash,
+                    'kms_signature' => $signature,
+                    'updated_at' => current_time('mysql', true),
+                ], ['id' => $invoiceId, 'status' => 'processing']));
+                $wpdb->query('COMMIT');
+            } catch (\Throwable $error) {
+                $wpdb->query('ROLLBACK');
+                throw $error;
+            }
+            return $this->requireInvoice($invoiceId);
+        });
+    }
+
     public function retryAndEnqueue(int $invoiceId): array
     {
         global $wpdb;
@@ -375,13 +418,13 @@ final class InvoiceRepository implements InvoiceStore
                     throw new \DomainException('Only a processing invoice can be issued.');
                 }
                 $this->assertSnapshotIntegrity($row);
+                if (! is_string($row['artifact_key'] ?? null) || $row['artifact_key'] === '' || ! preg_match('/^[a-f0-9]{64}$/', (string) ($row['artifact_hash'] ?? ''))) {
+                    throw new \DomainException('Invoice artifact evidence must be persisted before issue.');
+                }
                 $now = current_time('mysql', true);
                 $this->mustWrite($wpdb->update($table, [
                     'status' => 'issued',
                     'issued_at' => $now,
-                    'artifact_key' => $artifact['artifact_key'] ?? null,
-                    'artifact_hash' => $artifact['artifact_hash'] ?? null,
-                    'kms_signature' => $artifact['kms_signature'] ?? null,
                     'last_error' => null,
                     'updated_at' => $now,
                 ], ['id' => $invoiceId, 'status' => 'processing']));

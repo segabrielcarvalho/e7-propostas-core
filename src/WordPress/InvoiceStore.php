@@ -30,7 +30,7 @@ interface InvoiceStore
     /** @param array<string, mixed> $profile @param list<array<string, mixed>> $items @return array<string, mixed> */
     public function backfillLegacy(int $invoiceId, array $profile, array $items, int $totalMinor, int $actorId): array;
     /** @return array<string, mixed> */
-    public function cancel(int $invoiceId): array;
+    public function cancel(int $invoiceId, int $actorId): array;
     /** @return array<string, mixed> */
     public function createReplacement(int $invoiceId, int $actorId): array;
     /** @param array<string, mixed> $result @return array<string, mixed> */

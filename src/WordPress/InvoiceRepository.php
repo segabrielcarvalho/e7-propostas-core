@@ -368,16 +368,34 @@ final class InvoiceRepository implements InvoiceStore
         });
     }
 
-    public function cancel(int $invoiceId): array
+    public function cancel(int $invoiceId, int $actorId): array
     {
         global $wpdb;
-        $now = current_time('mysql', true);
-        $this->mustWrite($wpdb->update($this->table('e7_proposal_invoices'), [
-            'status' => 'cancelled',
-            'cancelled_at' => $now,
-            'updated_at' => $now,
-        ], ['id' => $invoiceId, 'status' => 'issued']));
-        return $this->requireInvoice($invoiceId);
+        return $this->withLock('e7-invoice-record-' . $invoiceId, function () use ($wpdb, $invoiceId, $actorId): array {
+            $candidate = $this->requireInvoice($invoiceId);
+            return $this->proposals->withAuditLock((int) $candidate['version_id'], function () use ($wpdb, $invoiceId, $actorId): array {
+                $table = $this->table('e7_proposal_invoices');
+                $wpdb->query('START TRANSACTION');
+                try {
+                    $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d FOR UPDATE", $invoiceId), ARRAY_A);
+                    if (! is_array($row) || $row['status'] !== 'issued') {
+                        throw new \DomainException('Only an issued invoice can be cancelled.');
+                    }
+                    $now = current_time('mysql', true);
+                    $this->mustWrite($wpdb->update($table, [
+                        'status' => 'cancelled',
+                        'cancelled_at' => $now,
+                        'updated_at' => $now,
+                    ], ['id' => $invoiceId, 'status' => 'issued']));
+                    $this->proposals->appendAudit((int) $row['version_id'], 'invoice.cancelled', ['invoice_id' => $invoiceId, 'actor_id' => $actorId], true);
+                    $wpdb->query('COMMIT');
+                } catch (\Throwable $error) {
+                    $wpdb->query('ROLLBACK');
+                    throw $error;
+                }
+                return $this->requireInvoice($invoiceId);
+            });
+        });
     }
 
     public function createReplacement(int $invoiceId, int $actorId): array
@@ -451,30 +469,59 @@ final class InvoiceRepository implements InvoiceStore
     public function markIssued(int $invoiceId, array $artifact): array
     {
         global $wpdb;
-        return $this->withLock('e7-invoice-record-' . $invoiceId, function () use ($wpdb, $invoiceId, $artifact): array {
-            $table = $this->table('e7_proposal_invoices');
-            $wpdb->query('START TRANSACTION');
-            try {
-                $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d FOR UPDATE", $invoiceId), ARRAY_A);
-                if (! is_array($row) || $row['status'] !== 'processing') {
-                    throw new \DomainException('Only a processing invoice can be issued.');
+        return $this->withLock('e7-invoice-record-' . $invoiceId, function () use ($wpdb, $invoiceId): array {
+            $candidate = $this->requireInvoice($invoiceId);
+            return $this->proposals->withAuditLock((int) $candidate['version_id'], function () use ($wpdb, $invoiceId): array {
+                $table = $this->table('e7_proposal_invoices');
+                $wpdb->query('START TRANSACTION');
+                try {
+                    $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d FOR UPDATE", $invoiceId), ARRAY_A);
+                    if (! is_array($row) || $row['status'] !== 'processing') {
+                        throw new \DomainException('Only a processing invoice can be issued.');
+                    }
+                    $this->assertSnapshotIntegrity($row);
+                    if (! is_string($row['artifact_key'] ?? null) || $row['artifact_key'] === '' || ! preg_match('/^[a-f0-9]{64}$/', (string) ($row['artifact_hash'] ?? '')) || ! preg_match('/^[a-f0-9]{64}$/', (string) ($row['signature_payload_hash'] ?? '')) || empty($row['issued_at'])) {
+                        throw new \DomainException('Invoice artifact evidence must be persisted before issue.');
+                    }
+                    $now = current_time('mysql', true);
+                    $this->mustWrite($wpdb->update($table, [
+                        'status' => 'issued',
+                        'last_error' => null,
+                        'updated_at' => $now,
+                    ], ['id' => $invoiceId, 'status' => 'processing']));
+                    $sourceId = isset($row['replacement_for_id']) ? (int) $row['replacement_for_id'] : 0;
+                    if ($sourceId > 0) {
+                        $source = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d FOR UPDATE", $sourceId), ARRAY_A);
+                        if (! is_array($source) || (int) $source['version_id'] !== (int) $row['version_id'] || ! in_array($source['status'], ['issued', 'cancelled'], true)) {
+                            throw new \DomainException('Replacement invoice source is invalid.');
+                        }
+                        if ($source['status'] === 'issued') {
+                            $this->mustWrite($wpdb->update($table, [
+                                'status' => 'cancelled',
+                                'cancelled_at' => $now,
+                                'replaced_at' => $now,
+                                'updated_at' => $now,
+                            ], ['id' => $sourceId, 'status' => 'issued']));
+                        }
+                        $this->proposals->appendAudit((int) $row['version_id'], 'invoice.replaced', [
+                            'invoice_id' => $sourceId,
+                            'replacement_id' => $invoiceId,
+                            'replacement_number' => (string) $row['invoice_number'],
+                        ], true);
+                    }
+                    $this->proposals->appendAudit((int) $row['version_id'], 'invoice.issued', [
+                        'invoice_id' => $invoiceId,
+                        'invoice_number' => (string) $row['invoice_number'],
+                        'artifact_hash' => (string) $row['artifact_hash'],
+                        'signature_payload_hash' => (string) $row['signature_payload_hash'],
+                    ], true);
+                    $wpdb->query('COMMIT');
+                } catch (\Throwable $error) {
+                    $wpdb->query('ROLLBACK');
+                    throw $error;
                 }
-                $this->assertSnapshotIntegrity($row);
-                if (! is_string($row['artifact_key'] ?? null) || $row['artifact_key'] === '' || ! preg_match('/^[a-f0-9]{64}$/', (string) ($row['artifact_hash'] ?? '')) || ! preg_match('/^[a-f0-9]{64}$/', (string) ($row['signature_payload_hash'] ?? '')) || empty($row['issued_at'])) {
-                    throw new \DomainException('Invoice artifact evidence must be persisted before issue.');
-                }
-                $now = current_time('mysql', true);
-                $this->mustWrite($wpdb->update($table, [
-                    'status' => 'issued',
-                    'last_error' => null,
-                    'updated_at' => $now,
-                ], ['id' => $invoiceId, 'status' => 'processing']));
-                $wpdb->query('COMMIT');
-            } catch (\Throwable $error) {
-                $wpdb->query('ROLLBACK');
-                throw $error;
-            }
-            return $this->requireInvoice($invoiceId);
+                return $this->requireInvoice($invoiceId);
+            });
         });
     }
 

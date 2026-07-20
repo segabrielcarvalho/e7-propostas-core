@@ -169,14 +169,7 @@ final class InvoiceService
             'issued_at' => $issuedAt,
         ];
         $this->store->persistArtifact($invoiceId, $evidence);
-        $issued = $this->store->markIssued($invoiceId, []);
-        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.issued', [
-            'invoice_id' => $invoiceId,
-            'invoice_number' => (string) $invoice['invoice_number'],
-            'artifact_hash' => $hash,
-            'signature_payload_hash' => $payloadHash,
-        ]);
-        return $issued;
+        return $this->store->markIssued($invoiceId, []);
     }
 
     public function markFinalizationFailed(int $invoiceId, string $message): void
@@ -201,9 +194,7 @@ final class InvoiceService
     {
         $invoice = $this->requireInvoice($invoiceId);
         InvoiceStatus::assertTransition((string) $invoice['status'], InvoiceStatus::CANCELLED);
-        $cancelled = $this->store->cancel($invoiceId);
-        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.cancelled', ['invoice_id' => $invoiceId, 'actor_id' => $actorId]);
-        return $cancelled;
+        return $this->store->cancel($invoiceId, $actorId);
     }
 
     /** @return array<string, mixed> */

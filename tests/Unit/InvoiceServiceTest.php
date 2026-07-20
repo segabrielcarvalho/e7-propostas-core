@@ -378,6 +378,7 @@ final class InMemoryInvoiceStore implements InvoiceStore
         if (! $this->integrityValid) { throw new \DomainException('Invoice snapshot integrity check failed.'); }
         $this->artifactEvents[] = 'issued';
         $this->invoice = array_merge($this->invoice, $artifact, ['status' => 'issued']);
+        $this->appendAudit((int) $this->invoice['version_id'], 'invoice.issued', ['invoice_id' => $invoiceId]);
         return $this->invoice;
     }
     public function persistArtifact(int $invoiceId, array $artifact): array
@@ -388,7 +389,7 @@ final class InMemoryInvoiceStore implements InvoiceStore
         return $this->invoice;
     }
     public function beginRetry(int $invoiceId): array { $this->invoice['status'] = 'processing'; return $this->invoice; }
-    public function cancel(int $invoiceId): array { $this->invoice['status'] = 'cancelled'; return $this->invoice; }
+    public function cancel(int $invoiceId, int $actorId): array { $this->invoice['status'] = 'cancelled'; $this->appendAudit((int) $this->invoice['version_id'], 'invoice.cancelled', compact('invoiceId', 'actorId')); return $this->invoice; }
     public function createReplacement(int $invoiceId, int $actorId = 0): array { return $this->invoice; }
     public function updateVies(int $invoiceId, array $result): array { return $this->invoice = array_merge($this->invoice, ['vies_status' => $result['status']], $result); }
     public function enqueueFinalization(int $invoiceId): void

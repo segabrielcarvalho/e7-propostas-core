@@ -82,7 +82,34 @@ final class InvoiceHardeningContractTest extends TestCase
         self::assertStringContainsString("query('START TRANSACTION')", $markIssued);
         self::assertStringContainsString('FOR UPDATE', $markIssued);
         self::assertStringContainsString('assertSnapshotIntegrity', $markIssued);
+        self::assertStringContainsString('withAuditLock', $markIssued);
+        self::assertStringContainsString("'invoice.issued'", $markIssued);
+        self::assertLessThan(strpos($markIssued, "query('COMMIT')"), strpos($markIssued, "'invoice.issued'"));
         self::assertLessThan(strpos($markIssued, "'status' => 'issued'"), strpos($markIssued, 'assertSnapshotIntegrity'));
+    }
+
+    public function test_cancellation_and_its_audit_event_are_committed_together(): void
+    {
+        $repository = $this->read('src/WordPress/InvoiceRepository.php');
+        $start = (int) strpos($repository, 'public function cancel');
+        $cancel = substr($repository, $start, 4000);
+
+        self::assertStringContainsString('withAuditLock', $cancel);
+        self::assertStringContainsString("query('START TRANSACTION')", $cancel);
+        self::assertStringContainsString("'invoice.cancelled'", $cancel);
+        self::assertLessThan(strpos($cancel, "query('COMMIT')"), strpos($cancel, "'invoice.cancelled'"));
+    }
+
+    public function test_issuing_a_replacement_cancels_its_source_in_the_same_transaction(): void
+    {
+        $repository = $this->read('src/WordPress/InvoiceRepository.php');
+        $start = (int) strpos($repository, 'public function markIssued');
+        $markIssued = substr($repository, $start, 6500);
+
+        self::assertStringContainsString('replacement_for_id', $markIssued);
+        self::assertStringContainsString("'status' => 'cancelled'", $markIssued);
+        self::assertStringContainsString("'invoice.replaced'", $markIssued);
+        self::assertLessThan(strpos($markIssued, "query('COMMIT')"), strpos($markIssued, "'invoice.replaced'"));
     }
 
     public function test_migration_checks_record_and_sequence_writes(): void

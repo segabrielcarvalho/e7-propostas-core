@@ -15,13 +15,14 @@ final class SchemaRequirements
             throw new \RuntimeException('Legacy acceptance idempotency index is still present.');
         }
 
-        self::assertColumns($schema, 'invoices', ['id', 'acceptance_id', 'version_id', 'public_id', 'invoice_number', 'currency', 'customer_payload', 'supplier_payload', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'legacy_backfill_required', 'snapshot_hash', 'vies_status', 'vies_checked_at', 'vies_evidence', 'issued_at', 'cancelled_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'kms_signature', 'provider_message_id', 'last_error', 'replacement_for_id', 'created_at', 'updated_at']);
+        self::assertColumns($schema, 'invoices', ['id', 'acceptance_id', 'version_id', 'public_id', 'invoice_number', 'currency', 'customer_payload', 'supplier_payload', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'legacy_backfill_required', 'snapshot_hash', 'vies_status', 'vies_checked_at', 'vies_evidence', 'issued_at', 'cancelled_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'signature_payload_hash', 'kms_signature', 'provider_message_id', 'last_error', 'replacement_for_id', 'created_at', 'updated_at']);
         self::assertNullable($schema, 'invoices', 'public_id', false);
         self::assertNullable($schema, 'invoices', 'invoice_number', true);
         self::assertNullable($schema, 'invoices', 'customer_payload', false);
         self::assertNullable($schema, 'invoices', 'supplier_payload', false);
         self::assertNullable($schema, 'invoices', 'items_payload', false);
         self::assertNullable($schema, 'invoices', 'snapshot_hash', false);
+        self::assertNullable($schema, 'invoices', 'signature_payload_hash', true);
         self::assertIndex($schema, 'invoices', 'acceptance_id', ['acceptance_id'], false);
         self::assertIndex($schema, 'invoices', 'public_id', ['public_id'], true);
         self::assertIndex($schema, 'invoices', 'invoice_number', ['invoice_number'], true);

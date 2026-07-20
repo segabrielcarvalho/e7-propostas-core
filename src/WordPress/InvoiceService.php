@@ -156,13 +156,17 @@ final class InvoiceService
         InvoiceStatus::assertTransition((string) $invoice['status'], InvoiceStatus::ISSUED);
         $key = trim((string) ($artifact['artifact_key'] ?? ''));
         $hash = strtolower(trim((string) ($artifact['artifact_hash'] ?? '')));
-        if ($key === '' || ! preg_match('/^[a-f0-9]{64}$/', $hash)) {
+        $payloadHash = strtolower(trim((string) ($artifact['signature_payload_hash'] ?? '')));
+        $issuedAt = trim((string) ($artifact['issued_at'] ?? ''));
+        if ($key === '' || ! preg_match('/^[a-f0-9]{64}$/', $hash) || ! preg_match('/^[a-f0-9]{64}$/', $payloadHash) || $issuedAt === '') {
             throw new \InvalidArgumentException('Issued invoice artifact evidence is invalid.');
         }
         $evidence = [
             'artifact_key' => $key,
             'artifact_hash' => $hash,
+            'signature_payload_hash' => $payloadHash,
             'kms_signature' => isset($artifact['kms_signature']) ? (string) $artifact['kms_signature'] : null,
+            'issued_at' => $issuedAt,
         ];
         $this->store->persistArtifact($invoiceId, $evidence);
         $issued = $this->store->markIssued($invoiceId, []);
@@ -170,6 +174,7 @@ final class InvoiceService
             'invoice_id' => $invoiceId,
             'invoice_number' => (string) $invoice['invoice_number'],
             'artifact_hash' => $hash,
+            'signature_payload_hash' => $payloadHash,
         ]);
         return $issued;
     }

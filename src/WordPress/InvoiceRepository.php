@@ -8,6 +8,7 @@ use E7Propostas\Domain\CanonicalPayload;
 use E7Propostas\Domain\InvoiceNumber;
 use E7Propostas\Domain\InvoiceSnapshot;
 use E7Propostas\Infrastructure\Crypto;
+use E7Propostas\Infrastructure\InvoiceSignatureEnvelope;
 
 final class InvoiceRepository implements InvoiceStore
 {
@@ -297,7 +298,9 @@ final class InvoiceRepository implements InvoiceStore
             $key = trim((string) ($artifact['artifact_key'] ?? ''));
             $hash = strtolower(trim((string) ($artifact['artifact_hash'] ?? '')));
             $signature = isset($artifact['kms_signature']) && $artifact['kms_signature'] !== '' ? (string) $artifact['kms_signature'] : null;
-            if ($key === '' || ! preg_match('/^[a-f0-9]{64}$/', $hash)) {
+            $payloadHash = strtolower(trim((string) ($artifact['signature_payload_hash'] ?? '')));
+            $issuedAt = trim((string) ($artifact['issued_at'] ?? ''));
+            if ($key === '' || ! preg_match('/^[a-f0-9]{64}$/', $hash) || ! preg_match('/^[a-f0-9]{64}$/', $payloadHash) || $issuedAt === '') {
                 throw new \InvalidArgumentException('Invoice artifact evidence is invalid.');
             }
             $wpdb->query('START TRANSACTION');
@@ -307,11 +310,18 @@ final class InvoiceRepository implements InvoiceStore
                     throw new \DomainException('Only a processing invoice can persist an artifact.');
                 }
                 $this->assertSnapshotIntegrity($row);
+                $invoice = $this->hydrate($row);
+                if (! hash_equals((string) ($row['due_at'] ?? ''), $issuedAt)
+                    || ! hash_equals(InvoiceSignatureEnvelope::hash(array_merge($invoice, ['artifact_hash' => $hash, 'issued_at' => $issuedAt])), $payloadHash)) {
+                    throw new \DomainException('Invoice signature envelope failed integrity validation.');
+                }
                 $existingKey = trim((string) ($row['artifact_key'] ?? ''));
                 $existingHash = strtolower(trim((string) ($row['artifact_hash'] ?? '')));
                 $existingSignature = isset($row['kms_signature']) && $row['kms_signature'] !== '' ? (string) $row['kms_signature'] : null;
-                if ($existingKey !== '' || $existingHash !== '' || $existingSignature !== null) {
-                    if ($existingKey !== $key || ! hash_equals($existingHash, $hash) || $existingSignature !== $signature) {
+                $existingPayloadHash = strtolower(trim((string) ($row['signature_payload_hash'] ?? '')));
+                $existingIssuedAt = trim((string) ($row['issued_at'] ?? ''));
+                if ($existingKey !== '' || $existingHash !== '' || $existingSignature !== null || $existingPayloadHash !== '' || $existingIssuedAt !== '') {
+                    if ($existingKey !== $key || ! hash_equals($existingHash, $hash) || $existingSignature !== $signature || ! hash_equals($existingPayloadHash, $payloadHash) || $existingIssuedAt !== $issuedAt) {
                         throw new \DomainException('Conflicting or partial invoice artifact evidence already exists.');
                     }
                     $wpdb->query('COMMIT');
@@ -320,7 +330,9 @@ final class InvoiceRepository implements InvoiceStore
                 $this->mustWrite($wpdb->update($table, [
                     'artifact_key' => $key,
                     'artifact_hash' => $hash,
+                    'signature_payload_hash' => $payloadHash,
                     'kms_signature' => $signature,
+                    'issued_at' => $issuedAt,
                     'updated_at' => current_time('mysql', true),
                 ], ['id' => $invoiceId, 'status' => 'processing']));
                 $wpdb->query('COMMIT');
@@ -448,13 +460,12 @@ final class InvoiceRepository implements InvoiceStore
                     throw new \DomainException('Only a processing invoice can be issued.');
                 }
                 $this->assertSnapshotIntegrity($row);
-                if (! is_string($row['artifact_key'] ?? null) || $row['artifact_key'] === '' || ! preg_match('/^[a-f0-9]{64}$/', (string) ($row['artifact_hash'] ?? ''))) {
+                if (! is_string($row['artifact_key'] ?? null) || $row['artifact_key'] === '' || ! preg_match('/^[a-f0-9]{64}$/', (string) ($row['artifact_hash'] ?? '')) || ! preg_match('/^[a-f0-9]{64}$/', (string) ($row['signature_payload_hash'] ?? '')) || empty($row['issued_at'])) {
                     throw new \DomainException('Invoice artifact evidence must be persisted before issue.');
                 }
                 $now = current_time('mysql', true);
                 $this->mustWrite($wpdb->update($table, [
                     'status' => 'issued',
-                    'issued_at' => $now,
                     'last_error' => null,
                     'updated_at' => $now,
                 ], ['id' => $invoiceId, 'status' => 'processing']));

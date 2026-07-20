@@ -155,7 +155,9 @@ final class InvoiceServiceTest extends TestCase
         $issued = (new InvoiceService($store))->markIssued(10, [
             'artifact_key' => 'invoices/example.pdf',
             'artifact_hash' => str_repeat('a', 64),
+            'signature_payload_hash' => str_repeat('b', 64),
             'kms_signature' => 'signature',
+            'issued_at' => '2026-07-20 12:00:00',
         ]);
 
         self::assertSame('issued', $issued['status']);
@@ -177,7 +179,9 @@ final class InvoiceServiceTest extends TestCase
         (new InvoiceService($store))->markIssued(10, [
             'artifact_key' => 'invoices/example.pdf#v1',
             'artifact_hash' => str_repeat('a', 64),
+            'signature_payload_hash' => str_repeat('b', 64),
             'kms_signature' => 'signature',
+            'issued_at' => '2026-07-20 12:00:00',
         ]);
 
         self::assertSame(['persist', 'issued'], $store->artifactEvents);
@@ -214,6 +218,8 @@ final class InvoiceServiceTest extends TestCase
             (new InvoiceService($store))->markIssued(10, [
                 'artifact_key' => 'invoices/example.pdf',
                 'artifact_hash' => str_repeat('a', 64),
+                'signature_payload_hash' => str_repeat('b', 64),
+                'issued_at' => '2026-07-20 12:00:00',
             ]);
             self::fail('A transplanted ciphertext must never be issued.');
         } catch (\DomainException $error) {

@@ -12,7 +12,7 @@ use E7Propostas\Infrastructure\Crypto;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.7.2';
+    public const SCHEMA_VERSION = '1.7.3';
     public const REWRITE_VERSION = '1.1.0';
 
     public static function activate(bool $networkWide = false): void
@@ -206,6 +206,7 @@ final class Installer
             due_at datetime NULL,
             artifact_key text NULL,
             artifact_hash char(64) NULL,
+            signature_payload_hash char(64) NULL,
             kms_signature longtext NULL,
             provider_message_id varchar(255) NULL,
             last_error text NULL,

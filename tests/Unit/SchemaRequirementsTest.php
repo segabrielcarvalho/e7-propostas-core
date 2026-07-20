@@ -26,6 +26,14 @@ final class SchemaRequirementsTest extends TestCase
         SchemaRequirements::assertReady($schema);
     }
 
+    public function test_missing_invoice_signature_payload_hash_is_rejected(): void
+    {
+        $schema = $this->completeSchema();
+        $schema['invoices']['columns'] = array_values(array_diff($schema['invoices']['columns'], ['signature_payload_hash']));
+        $this->expectException(\RuntimeException::class);
+        SchemaRequirements::assertReady($schema);
+    }
+
     public function test_unique_acceptance_index_is_rejected_to_allow_replacements(): void
     {
         self::assertTrue(class_exists(SchemaRequirements::class), 'SchemaRequirements must exist.');
@@ -88,7 +96,7 @@ final class SchemaRequirementsTest extends TestCase
                 'indexes' => ['version_idempotency' => ['unique' => true, 'columns' => ['version_id', 'idempotency_key']]],
             ],
             'invoices' => [
-                'columns' => ['id', 'acceptance_id', 'version_id', 'public_id', 'invoice_number', 'currency', 'customer_payload', 'supplier_payload', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'legacy_backfill_required', 'snapshot_hash', 'vies_status', 'vies_checked_at', 'vies_evidence', 'issued_at', 'cancelled_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'kms_signature', 'provider_message_id', 'last_error', 'replacement_for_id', 'created_at', 'updated_at'],
+                'columns' => ['id', 'acceptance_id', 'version_id', 'public_id', 'invoice_number', 'currency', 'customer_payload', 'supplier_payload', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'legacy_backfill_required', 'snapshot_hash', 'vies_status', 'vies_checked_at', 'vies_evidence', 'issued_at', 'cancelled_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'signature_payload_hash', 'kms_signature', 'provider_message_id', 'last_error', 'replacement_for_id', 'created_at', 'updated_at'],
                 'column_definitions' => [
                     'public_id' => ['nullable' => false],
                     'invoice_number' => ['nullable' => true],
@@ -96,6 +104,7 @@ final class SchemaRequirementsTest extends TestCase
                     'supplier_payload' => ['nullable' => false],
                     'items_payload' => ['nullable' => false],
                     'snapshot_hash' => ['nullable' => false],
+                    'signature_payload_hash' => ['nullable' => true],
                 ],
                 'indexes' => [
                     'acceptance_id' => ['unique' => false, 'columns' => ['acceptance_id']],

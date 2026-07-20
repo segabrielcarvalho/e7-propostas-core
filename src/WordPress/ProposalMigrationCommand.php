@@ -145,6 +145,7 @@ final class ProposalMigrationCommand
             'meta_value' => (string) $sourceId,
         ]);
         $postId = isset($existing[0]) ? (int) $existing[0] : 0;
+        $isExistingImport = $postId > 0;
         if ($postId > 0 && $this->repository->isAcceptedPost($postId)) {
             throw new \DomainException(sprintf('Proposal imported from source %d is already accepted and immutable.', $sourceId));
         }
@@ -172,7 +173,7 @@ final class ProposalMigrationCommand
         $settings = $this->safeSettings($proposal['settings']);
         $this->repository->saveSettings($postId, $settings, $passwordHash);
         if ($settings['share_code'] !== '') {
-            $this->repository->restoreShareCode($postId, (string) $settings['share_code']);
+            $this->repository->restoreShareCode($postId, (string) $settings['share_code'], $isExistingImport);
         }
         $published = wp_update_post(['ID' => $postId, 'post_status' => 'publish'], true);
         if (is_wp_error($published)) {

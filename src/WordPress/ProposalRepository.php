@@ -177,7 +177,7 @@ final class ProposalRepository
         return is_string($code) && $code !== '' ? strtolower($code) : null;
     }
 
-    public function restoreShareCode(int $postId, string $code): void
+    public function restoreShareCode(int $postId, string $code, bool $replaceIncompleteImport = false): void
     {
         global $wpdb;
         $normalized = $this->shareCodes->normalize($code);
@@ -194,7 +194,18 @@ final class ProposalRepository
         $current = $wpdb->get_var($wpdb->prepare("SELECT share_code FROM $table WHERE post_id = %d LIMIT 1", $postId));
         if (is_string($current) && $current !== '') {
             if (! hash_equals(strtolower($current), $normalized)) {
-                throw new \DomainException('An imported proposal cannot change its stable share code.');
+                if (! ($replaceIncompleteImport && ! $this->isAcceptedPost($postId))) {
+                    throw new \DomainException('An imported proposal cannot change its stable share code.');
+                }
+                $updated = $wpdb->query($wpdb->prepare(
+                    "UPDATE $table SET share_code = %s WHERE post_id = %d AND share_code = %s",
+                    $normalized,
+                    $postId,
+                    $current,
+                ));
+                if ($updated !== 1) {
+                    throw new \RuntimeException('Could not replace the incomplete import share code.');
+                }
             }
             return;
         }

@@ -131,6 +131,9 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString('public function restoreShareCode', $repository);
         self::assertStringContainsString('$this->shareCodes->normalize($code)', $repository);
         self::assertStringContainsString('Share code is already assigned to another proposal.', $repository);
+        self::assertStringContainsString('bool $replaceIncompleteImport = false', $repository);
+        self::assertStringContainsString('$replaceIncompleteImport && ! $this->isAcceptedPost($postId)', $repository);
+        self::assertStringContainsString('restoreShareCode($postId, (string) $settings[\'share_code\'], $isExistingImport)', $migration);
     }
 
     public function test_exposes_only_versioned_public_workflow_routes(): void

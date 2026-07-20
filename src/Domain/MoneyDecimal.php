@@ -9,7 +9,7 @@ final class MoneyDecimal
     public static function parse(string $value): int
     {
         $decimal = trim($value);
-        if (! preg_match('/^(0|[0-9]*[1-9][0-9]*)(?:([.,])([0-9]{1,2}))?$/', $decimal, $matches)) {
+        if (! preg_match('/^([0-9]+)(?:([.,])([0-9]{1,2}))?$/', $decimal, $matches)) {
             throw new \InvalidArgumentException('Invoice amount must be a positive decimal with at most two decimal places.');
         }
 

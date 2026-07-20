@@ -40,13 +40,14 @@ final class AdminMetaBox
             });
         });
         const parseMinor = (raw) => {
+            const maxMinor = 9223372036854775807n;
             const value = raw.trim();
             const match = value.match(/^\d+(?:[.,](\d{1,2}))?$/);
             if (!match) return null;
             const parts = value.split(/[.,]/);
             const fraction = (parts[1] || '').padEnd(2, '0');
             const minor = (BigInt(parts[0]) * 100n) + BigInt(fraction || '0');
-            return minor > 0n ? minor : null;
+            return minor > 0n && minor <= maxMinor ? minor : null;
         };
         const formatMinor = (minor) => {
             const major = (minor / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');

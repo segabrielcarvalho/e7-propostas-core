@@ -24,6 +24,8 @@ final class MoneyDecimalTest extends TestCase
         yield 'one decimal place' => ['12.5', 1250];
         yield 'local decimal comma' => ['1500,25', 150025];
         yield 'surrounding whitespace' => ['  0.01  ', 1];
+        yield 'leading zero euros' => ['00.50', 50];
+        yield 'multiple leading zeros' => ['000.01', 1];
     }
 
     #[DataProvider('invalidDecimals')]

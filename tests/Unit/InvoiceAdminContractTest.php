@@ -55,6 +55,7 @@ final class InvoiceAdminContractTest extends TestCase
         self::assertStringContainsString("locale === 'en_IE'", $admin);
         self::assertStringContainsString("currency === 'EUR'", $admin);
         self::assertStringContainsString('wp_add_inline_script', $admin);
+        self::assertStringContainsString('9223372036854775807n', $admin);
         self::assertStringNotContainsString('Valor em unidade menor', $admin);
     }
 

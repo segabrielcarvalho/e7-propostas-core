@@ -1,6 +1,7 @@
 {
   "name": "e7-company/e7-propostas-core",
   "description": "Nucleo seguro de propostas e aceite eletronico da E7 Company.",
+  "license": "proprietary",
   "type": "wordpress-plugin",
   "require": {
     "php": ">=8.2",

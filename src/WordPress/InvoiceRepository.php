@@ -72,6 +72,36 @@ final class InvoiceRepository implements InvoiceStore
         return $this->hydrate($row);
     }
 
+    public function findByPublicId(string $publicId): ?array
+    {
+        global $wpdb;
+        if (! preg_match('/^[a-f0-9]{32}$/', $publicId)) {
+            return null;
+        }
+        $table = $this->table('e7_proposal_invoices');
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT i.*, replacement.status AS replacement_status, replacement.invoice_number AS replacement_invoice_number FROM $table i LEFT JOIN $table replacement ON replacement.replacement_for_id=i.id WHERE i.public_id=%s LIMIT 1",
+            $publicId,
+        ), ARRAY_A);
+        if (! is_array($row)) {
+            return null;
+        }
+        $this->assertSnapshotIntegrity($row);
+        return $this->hydrate($row);
+    }
+
+    public function latestIssuedForVersion(int $versionId): ?array
+    {
+        global $wpdb;
+        $table = $this->table('e7_proposal_invoices');
+        $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE version_id=%d AND status='issued' ORDER BY id DESC LIMIT 1", $versionId), ARRAY_A);
+        if (! is_array($row)) {
+            return null;
+        }
+        $this->assertSnapshotIntegrity($row);
+        return $this->hydrate($row);
+    }
+
     public function findByPost(int $postId): ?array
     {
         global $wpdb;

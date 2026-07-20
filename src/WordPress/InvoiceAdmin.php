@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace E7Propostas\WordPress;
 
 use E7Propostas\Domain\SupplierProfile;
+use E7Propostas\Infrastructure\ArtifactDownload;
 
 final class InvoiceAdmin
 {
@@ -12,7 +13,7 @@ final class InvoiceAdmin
     private const PAGE = 'e7-commercial-invoice';
     private const NONCE = 'e7_invoice_action';
 
-    public function __construct(private readonly InvoiceRepository $repository, private readonly InvoiceService $service)
+    public function __construct(private readonly InvoiceRepository $repository, private readonly InvoiceService $service, private readonly ArtifactDownload $artifactDownload)
     {
     }
 
@@ -20,6 +21,7 @@ final class InvoiceAdmin
     {
         add_action('admin_menu', [$this, 'menu']);
         add_action('admin_post_e7_invoice_action', [$this, 'handle']);
+        add_action('admin_post_e7_invoice_download', [$this, 'handleDownload']);
     }
 
     public function menu(): void
@@ -101,6 +103,24 @@ final class InvoiceAdmin
         }
     }
 
+    public function handleDownload(): never
+    {
+        if (! current_user_can(self::CAPABILITY)) {
+            wp_die(esc_html__('You are not allowed to download invoices.', 'e7-propostas'), '', ['response' => 403]);
+        }
+        $invoiceId = absint($_GET['invoice_id'] ?? 0);
+        check_admin_referer('e7_invoice_download_' . $invoiceId);
+        try {
+            $invoice = $this->repository->verifiedInvoice($invoiceId);
+        } catch (\Throwable) {
+            wp_die(esc_html__('Invoice was not found.', 'e7-propostas'), '', ['response' => 404]);
+        }
+        if (! in_array($invoice['status'], ['issued', 'cancelled'], true)) {
+            wp_die(esc_html__('Invoice artifact is not available.', 'e7-propostas'), '', ['response' => 409]);
+        }
+        $this->artifactDownload->serve($invoice, (string) $invoice['public_id'], 'invoice');
+    }
+
     /** @param array<string, mixed> $invoice */
     private function renderInvoice(array $invoice): void
     {
@@ -108,6 +128,11 @@ final class InvoiceAdmin
         echo '<h2>' . esc_html((string) ($invoice['invoice_number'] ?: __('Draft invoice', 'e7-propostas'))) . '</h2>';
         echo '<p><strong>' . esc_html__('Status', 'e7-propostas') . ':</strong> ' . esc_html($status) . '</p>';
         echo '<p><strong>Public ID:</strong> <code>' . esc_html((string) $invoice['public_id']) . '</code></p>';
+        if (in_array($status, ['issued', 'cancelled'], true) && ! empty($invoice['artifact_key'])) {
+            $downloadUrl = wp_nonce_url(admin_url('admin-post.php?action=e7_invoice_download&invoice_id=' . (int) $invoice['id']), 'e7_invoice_download_' . (int) $invoice['id']);
+            $verifyUrl = home_url('/invoice/verify/' . (string) $invoice['public_id'] . '/');
+            echo '<p><a class="button button-primary" href="' . esc_url($downloadUrl) . '">' . esc_html__('Download artifact', 'e7-propostas') . '</a> <a class="button" href="' . esc_url($verifyUrl) . '" target="_blank" rel="noopener noreferrer">' . esc_html__('Verify publicly', 'e7-propostas') . '</a></p>';
+        }
         if (! empty($invoice['legacy_backfill_required']) && $status === 'draft') {
             $this->renderLegacyBackfill($invoice);
             return;

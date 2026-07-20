@@ -13,6 +13,7 @@ use E7Propostas\Infrastructure\Crypto;
 final class Installer
 {
     public const SCHEMA_VERSION = '1.7.2';
+    public const REWRITE_VERSION = '1.1.0';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -34,6 +35,7 @@ final class Installer
 
         PublicRoutes::registerRewrites();
         flush_rewrite_rules();
+        update_option('e7_propostas_rewrite_version', self::REWRITE_VERSION, false);
     }
 
     public static function deactivate(): void
@@ -44,6 +46,7 @@ final class Installer
     public static function ensureSchema(): void
     {
         self::ensureCapabilities();
+        self::ensureRewrites();
         if (get_option('e7_propostas_schema_version') === self::SCHEMA_VERSION) {
             return;
         }
@@ -54,7 +57,13 @@ final class Installer
         self::migrateInvoiceJobKeys();
         self::assertSchemaInstalled();
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
-        self::scheduleRewriteFlush();
+    }
+
+    private static function ensureRewrites(): void
+    {
+        if (get_option('e7_propostas_rewrite_version') !== self::REWRITE_VERSION) {
+            self::scheduleRewriteFlush();
+        }
     }
 
     private static function ensureCapabilities(): void
@@ -72,6 +81,7 @@ final class Installer
         add_action('init', static function (): void {
             PublicRoutes::registerRewrites();
             flush_rewrite_rules(false);
+            update_option('e7_propostas_rewrite_version', self::REWRITE_VERSION, false);
         }, PHP_INT_MAX);
     }
 

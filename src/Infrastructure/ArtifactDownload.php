@@ -9,7 +9,7 @@ use Aws\S3\S3Client;
 final class ArtifactDownload
 {
     /** @param array<string, mixed> $version */
-    public function serve(array $version, string $publicId): never
+    public function serve(array $version, string $publicId, string $document = 'proposal'): never
     {
         $artifactKey = (string) ($version['artifact_key'] ?? '');
         $expectedHash = (string) ($version['artifact_hash'] ?? '');
@@ -47,7 +47,8 @@ final class ArtifactDownload
         }
         nocache_headers();
         header('Content-Type: ' . $contentType);
-        header('Content-Disposition: attachment; filename="e7-proposal-' . $publicId . '.' . $extension . '"');
+        $document = in_array($document, ['proposal', 'invoice'], true) ? $document : 'document';
+        header('Content-Disposition: attachment; filename="e7-' . $document . '-' . $publicId . '.' . $extension . '"');
         header('Content-Length: ' . strlen($contents));
         echo $contents;
         exit;

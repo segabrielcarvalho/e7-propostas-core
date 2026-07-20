@@ -69,7 +69,7 @@ final class BusinessProfile
             'responsible' => $responsible,
             'type' => $type,
             'legal_name' => self::requiredTextWithLimit($input['legal_name'] ?? null, 160, 'legal_name'),
-            'trading_name' => self::requiredTextWithLimit($input['trading_name'] ?? null, 160, 'trading_name'),
+            'trading_name' => self::optionalText($input['trading_name'] ?? '', 160, 'trading_name'),
             'registration_number' => $registration,
             'vat_registered' => $vatRegistered,
             'vat_number' => $vat,
@@ -99,7 +99,7 @@ final class BusinessProfile
             'line1' => self::requiredText($address['line1'] ?? null, $field . '.line1'),
             'line2' => self::optionalText($address['line2'] ?? '', 190, $field . '.line2'),
             'city' => self::requiredText($address['city'] ?? null, $field . '.city'),
-            'county' => self::requiredText($address['county'] ?? null, $field . '.county'),
+            'county' => self::optionalText($address['county'] ?? '', 190, $field . '.county'),
             'eircode' => self::eircode($address['eircode'] ?? null, $field . '.eircode'),
             'country_code' => 'IE',
         ];

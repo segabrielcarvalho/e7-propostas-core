@@ -68,6 +68,21 @@ final class CommercialInvoiceFoundationTest extends TestCase
         self::assertTrue($profile['confirmations']['accuracy']);
     }
 
+    public function test_business_profile_accepts_optional_trading_name_and_counties(): void
+    {
+        $profile = $this->validBusinessProfile();
+        unset($profile['trading_name'], $profile['registered_address']['county']);
+        $profile['billing_same_as_registered'] = false;
+        $profile['billing_address'] = $profile['registered_address'];
+
+        $normalized = BusinessProfile::normalize($profile);
+
+        self::assertSame('', $normalized['trading_name']);
+        self::assertSame('', $normalized['registered_address']['county']);
+        self::assertSame('', $normalized['billing_address']['county']);
+        self::assertSame('123456', $normalized['registration_number']);
+    }
+
     #[DataProvider('invalidBusinessProfiles')]
     public function test_business_profile_rejects_missing_or_inconsistent_fiscal_data(array $changes): void
     {
@@ -117,6 +132,23 @@ final class CommercialInvoiceFoundationTest extends TestCase
         ]];
         yield 'legal name is bounded' => [[
             'legal_name' => 'A' . str_repeat('b', 160),
+        ]];
+        yield 'trading name is bounded when present' => [[
+            'trading_name' => 'A' . str_repeat('b', 160),
+        ]];
+        yield 'registered county is bounded when present' => [[
+            'registered_address' => ['county' => 'A' . str_repeat('b', 190)],
+        ]];
+        yield 'billing county is bounded when present' => [[
+            'billing_same_as_registered' => false,
+            'billing_address' => [
+                'line1' => '2 Main Street',
+                'line2' => '',
+                'city' => 'Dublin',
+                'county' => 'A' . str_repeat('b', 190),
+                'eircode' => 'D02 X285',
+                'country_code' => 'IE',
+            ],
         ]];
         yield 'payer legal name is bounded' => [[
             'payer_same_as_business' => false,

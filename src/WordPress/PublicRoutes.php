@@ -153,17 +153,11 @@ final class PublicRoutes
         } catch (\Throwable) {
             $record = null;
         }
+        self::$view = ['screen' => 'invoice_verify', 'record' => $record, 'locale' => 'en_IE'];
         if (! is_array($record)) {
             status_header(404);
-            wp_die(esc_html__('Invoice verification record was not found.', 'e7-propostas'), '', ['response' => 404]);
         }
-        $rows = '';
-        foreach ($record as $label => $value) {
-            $display = is_bool($value) ? ($value ? 'yes' : 'no') : ($value ?? '—');
-            $rows .= '<dt>' . esc_html(ucwords(str_replace('_', ' ', $label))) . '</dt><dd>' . esc_html((string) $display) . '</dd>';
-        }
-        echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow,noarchive"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Invoice verification</title><style>body{font:16px/1.5 Arial,sans-serif;color:#122033;margin:40px auto;max-width:760px;padding:0 20px}h1{color:#071a33}dl{display:grid;grid-template-columns:minmax(180px,1fr) 2fr;gap:8px 24px}dt{font-weight:700}dd{margin:0;word-break:break-word}</style></head><body><main><h1>Invoice verification</h1><dl>' . $rows . '</dl></main></body></html>';
-        exit;
+        $this->render('invoice-verify.php');
     }
 
     private function render(string $file): never

@@ -106,6 +106,20 @@ final class InvoiceRoutesTest extends TestCase
         self::assertStringNotContainsString('NFS-e', $admin);
     }
 
+    public function test_invoice_verification_uses_the_theme_view_for_found_and_missing_records(): void
+    {
+        $routes = (string) file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/PublicRoutes.php');
+        $method = substr($routes, (int) strpos($routes, 'private function invoiceVerification'), 1200);
+
+        self::assertStringContainsString("'screen' => 'invoice_verify'", $method);
+        self::assertStringContainsString("'record' => \$record", $method);
+        self::assertStringContainsString("'locale' => 'en_IE'", $method);
+        self::assertStringContainsString("status_header(404)", $method);
+        self::assertStringContainsString("\$this->render('invoice-verify.php')", $method);
+        self::assertStringNotContainsString("echo '<!doctype html>", $method);
+        self::assertStringNotContainsString('Invoice verification record was not found.', $method);
+    }
+
     public function test_invoice_rewrite_rules_are_flushed_once_when_the_route_contract_changes(): void
     {
         $installer = (string) file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/Installer.php');

@@ -42,7 +42,7 @@ final class PluginContractTest extends TestCase
         foreach (['e7_proposal_settings', 'e7_proposal_versions', 'e7_proposal_sessions', 'e7_proposal_otps', 'e7_proposal_acceptances', 'e7_proposal_audit_events', 'e7_proposal_jobs', 'e7_proposal_rate_limits'] as $table) {
             self::assertStringContainsString($table, $installer);
         }
-        self::assertStringContainsString("SCHEMA_VERSION = '1.6.1'", $installer);
+        self::assertStringContainsString("SCHEMA_VERSION = '1.7.0'", $installer);
         self::assertStringContainsString('share_code char(8) NULL', $installer);
         self::assertStringContainsString('UNIQUE KEY share_code (share_code)', $installer);
         self::assertStringContainsString("signer_email varchar(254) NOT NULL DEFAULT ''", $installer);

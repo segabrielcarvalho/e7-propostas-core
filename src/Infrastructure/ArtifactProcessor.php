@@ -21,10 +21,10 @@ final class ArtifactProcessor
         $jobs = $wpdb->prefix . 'e7_proposal_jobs';
         $now = current_time('mysql', true);
         $stale = gmdate('Y-m-d H:i:s', time() - 15 * MINUTE_IN_SECONDS);
-        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM $jobs WHERE (status IN ('pending','retry') AND next_run_at <= %s) OR (status='processing' AND locked_at < %s) ORDER BY id ASC LIMIT 5", $now, $stale), ARRAY_A);
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM $jobs WHERE job_type='finalize_acceptance' AND ((status IN ('pending','retry') AND next_run_at <= %s) OR (status='processing' AND locked_at < %s)) ORDER BY id ASC LIMIT 5", $now, $stale), ARRAY_A);
         $processed = 0;
         foreach (is_array($rows) ? $rows : [] as $job) {
-            $claimed = $wpdb->query($wpdb->prepare("UPDATE $jobs SET status='processing', locked_at=%s, updated_at=%s WHERE id=%d AND (status IN ('pending','retry') OR (status='processing' AND locked_at < %s))", $now, $now, (int) $job['id'], $stale));
+            $claimed = $wpdb->query($wpdb->prepare("UPDATE $jobs SET status='processing', locked_at=%s, updated_at=%s WHERE id=%d AND job_type='finalize_acceptance' AND (status IN ('pending','retry') OR (status='processing' AND locked_at < %s))", $now, $now, (int) $job['id'], $stale));
             if ($claimed !== 1) {
                 continue;
             }

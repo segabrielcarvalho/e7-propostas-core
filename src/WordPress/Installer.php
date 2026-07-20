@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace E7Propostas\WordPress;
 
 use E7Propostas\Domain\CanonicalPayload;
+use E7Propostas\Domain\InvoiceSnapshot;
 use E7Propostas\Domain\SupplierProfile;
 use E7Propostas\Infrastructure\Crypto;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.6.1';
+    public const SCHEMA_VERSION = '1.7.0';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -178,6 +179,8 @@ final class Installer
             subtotal_minor bigint unsigned NOT NULL,
             total_minor bigint unsigned NOT NULL,
             status varchar(20) NOT NULL DEFAULT 'draft',
+            legacy_backfill_required tinyint(1) NOT NULL DEFAULT 0,
+            snapshot_hash char(64) NULL,
             vies_status varchar(20) NOT NULL DEFAULT 'not_requested',
             vies_checked_at datetime NULL,
             vies_evidence longtext NULL,
@@ -228,6 +231,7 @@ final class Installer
             id bigint unsigned NOT NULL AUTO_INCREMENT,
             version_id bigint unsigned NOT NULL,
             job_type varchar(80) NOT NULL,
+            idempotency_key char(64) NULL,
             status varchar(20) NOT NULL DEFAULT 'pending',
             attempts tinyint unsigned NOT NULL DEFAULT 0,
             next_run_at datetime NOT NULL,
@@ -238,6 +242,7 @@ final class Installer
             created_at datetime NOT NULL,
             updated_at datetime NOT NULL,
             PRIMARY KEY  (id),
+            UNIQUE KEY idempotency_key (idempotency_key),
             KEY runnable (status,next_run_at)
         ) $charset;";
         $schemas[] = "CREATE TABLE {$prefix}e7_proposal_rate_limits (
@@ -319,23 +324,57 @@ final class Installer
                 ? $row['public_id']
                 : bin2hex(random_bytes(16));
             $invoiceNumber = isset($row['invoice_number']) && trim((string) $row['invoice_number']) !== '' ? trim((string) $row['invoice_number']) : null;
-            $wpdb->update($table, [
+            $customer = self::openSealedPayload($crypto, $customerPayload);
+            $supplier = self::openSealedPayload($crypto, $supplierPayload);
+            $items = self::openSealedPayload($crypto, $itemsPayload);
+            $legacyBackfillRequired = (int) ($row['legacy_backfill_required'] ?? 0) === 1;
+            try {
+                $snapshotHash = InvoiceSnapshot::hash($publicId, (int) $row['acceptance_id'], (int) $row['version_id'], (string) ($row['currency'] ?? 'EUR'), (int) ($row['total_minor'] ?? 0), $customer, $supplier, $items);
+            } catch (\Throwable) {
+                $legacyBackfillRequired = true;
+                $snapshotHash = CanonicalPayload::hash([
+                    'public_id' => $publicId,
+                    'acceptance_id' => (int) $row['acceptance_id'],
+                    'version_id' => (int) $row['version_id'],
+                    'currency' => (string) ($row['currency'] ?? 'EUR'),
+                    'total_minor' => (int) ($row['total_minor'] ?? 0),
+                    'customer' => $customer,
+                    'supplier' => $supplier,
+                    'items' => $items,
+                ]);
+            }
+            if ($wpdb->update($table, [
                 'public_id' => $publicId,
                 'invoice_number' => $invoiceNumber,
                 'customer_payload' => $customerPayload,
                 'supplier_payload' => $supplierPayload,
                 'items_payload' => $itemsPayload,
                 'status' => $status,
+                'legacy_backfill_required' => $legacyBackfillRequired ? 1 : 0,
+                'snapshot_hash' => $snapshotHash,
                 'cancelled_at' => $row['cancelled_at'] ?? ($row['voided_at'] ?? null),
                 'updated_at' => $row['updated_at'] ?? current_time('mysql', true),
-            ], ['id' => $id]);
+            ], ['id' => $id]) === false) {
+                throw new \RuntimeException('Invoice migration record update failed.');
+            }
             if (is_string($invoiceNumber) && preg_match('/^E7-([0-9]{4})-([0-9]{4})$/', $invoiceNumber, $match)) {
                 self::advanceInvoiceSequence((int) $match[1], (int) $match[2]);
             }
         }
         $escaped = str_replace('`', '``', $table);
-        if ($wpdb->query("ALTER TABLE `$escaped` MODIFY `public_id` char(32) NOT NULL, MODIFY `invoice_number` varchar(64) NULL, MODIFY `customer_payload` longtext NOT NULL, MODIFY `supplier_payload` longtext NOT NULL, MODIFY `items_payload` longtext NOT NULL") === false) {
+        if ($wpdb->query("ALTER TABLE `$escaped` MODIFY `public_id` char(32) NOT NULL, MODIFY `invoice_number` varchar(64) NULL, MODIFY `customer_payload` longtext NOT NULL, MODIFY `supplier_payload` longtext NOT NULL, MODIFY `items_payload` longtext NOT NULL, MODIFY `snapshot_hash` char(64) NOT NULL") === false) {
             throw new \RuntimeException('Could not finalize invoice column constraints.');
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private static function openSealedPayload(Crypto $crypto, string $payload): array
+    {
+        try {
+            $decoded = json_decode($crypto->open($payload), true, 512, JSON_THROW_ON_ERROR);
+            return is_array($decoded) ? $decoded : [];
+        } catch (\Throwable) {
+            return [];
         }
     }
 
@@ -359,13 +398,15 @@ final class Installer
         global $wpdb;
         $table = $wpdb->prefix . 'e7_proposal_invoice_sequences';
         $now = current_time('mysql', true);
-        $wpdb->query($wpdb->prepare(
+        if ($wpdb->query($wpdb->prepare(
             "INSERT INTO $table (sequence_scope,sequence_year,current_value,created_at,updated_at) VALUES ('commercial',%d,%d,%s,%s) ON DUPLICATE KEY UPDATE current_value=GREATEST(current_value,VALUES(current_value)), updated_at=VALUES(updated_at)",
             $year,
             $value,
             $now,
             $now,
-        ));
+        )) === false) {
+            throw new \RuntimeException('Invoice sequence migration failed.');
+        }
     }
 
     private static function assertSchemaInstalled(): void
@@ -378,7 +419,7 @@ final class Installer
     {
         global $wpdb;
         $schema = [];
-        foreach (['acceptances' => 'e7_proposal_acceptances', 'invoices' => 'e7_proposal_invoices', 'sequences' => 'e7_proposal_invoice_sequences'] as $name => $suffix) {
+        foreach (['acceptances' => 'e7_proposal_acceptances', 'invoices' => 'e7_proposal_invoices', 'sequences' => 'e7_proposal_invoice_sequences', 'jobs' => 'e7_proposal_jobs'] as $name => $suffix) {
             $table = $wpdb->prefix . $suffix;
             $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table)));
             if ($found !== $table) {

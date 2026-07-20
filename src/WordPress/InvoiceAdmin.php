@@ -41,7 +41,8 @@ final class InvoiceAdmin
         echo '<div class="wrap"><h1>' . esc_html__('Commercial invoice', 'e7-propostas') . '</h1>';
         $notice = isset($_GET['e7_invoice_notice']) ? sanitize_key((string) $_GET['e7_invoice_notice']) : '';
         if ($notice !== '') {
-            echo '<div class="notice notice-success"><p>' . esc_html__('Invoice operation completed.', 'e7-propostas') . '</p></div>';
+            $isError = $notice === 'error';
+            echo '<div class="notice ' . ($isError ? 'notice-error' : 'notice-success') . '"><p>' . esc_html($isError ? __('Invoice operation failed. Review the error above.', 'e7-propostas') : __('Invoice operation completed.', 'e7-propostas')) . '</p></div>';
         }
         if (is_array($invoice)) {
             $this->renderInvoice($invoice);
@@ -77,6 +78,13 @@ final class InvoiceAdmin
                     $actorId,
                 ),
                 'save_draft' => $this->service->saveDraftCustomer($invoiceId, $this->profileFromPost((array) wp_unslash($_POST['customer_profile'] ?? [])), $actorId),
+                'backfill_legacy' => $this->service->backfillLegacy(
+                    $invoiceId,
+                    $this->profileFromPost((array) wp_unslash($_POST['customer_profile'] ?? [])),
+                    $this->itemsFromPost((array) wp_unslash($_POST['invoice_items'] ?? [])),
+                    isset($_POST['legacy_confirmation']),
+                    $actorId,
+                ),
                 'issue' => $this->service->issue($invoiceId, isset($_POST['vies_acknowledgement']), $actorId),
                 'retry' => $this->service->retry($invoiceId, $actorId),
                 'cancel' => $this->service->cancel($invoiceId, $actorId),
@@ -100,6 +108,10 @@ final class InvoiceAdmin
         echo '<h2>' . esc_html((string) ($invoice['invoice_number'] ?: __('Draft invoice', 'e7-propostas'))) . '</h2>';
         echo '<p><strong>' . esc_html__('Status', 'e7-propostas') . ':</strong> ' . esc_html($status) . '</p>';
         echo '<p><strong>Public ID:</strong> <code>' . esc_html((string) $invoice['public_id']) . '</code></p>';
+        if (! empty($invoice['legacy_backfill_required'])) {
+            $this->renderLegacyBackfill($invoice);
+            return;
+        }
         echo '<p><strong>VIES:</strong> ' . esc_html((string) ($invoice['vies_status'] ?? 'not_requested')) . ' ' . esc_html((string) ($invoice['vies_checked_at'] ?? '')) . '</p>';
         $this->openForm('vies', (int) $invoice['id']);
         submit_button(__('Recheck VIES', 'e7-propostas'), 'secondary', 'submit', false);
@@ -137,6 +149,18 @@ final class InvoiceAdmin
             submit_button(__('Create replacement', 'e7-propostas'), 'secondary', 'submit', false);
             echo '</form>';
         }
+    }
+
+    /** @param array<string, mixed> $invoice */
+    private function renderLegacyBackfill(array $invoice): void
+    {
+        echo '<div class="notice notice-warning"><p>' . esc_html__('Legacy backfill required before this invoice can be issued.', 'e7-propostas') . '</p></div>';
+        $this->openForm('backfill_legacy', (int) $invoice['id']);
+        $this->renderCustomerFields((array) ($invoice['customer_profile'] ?? []), false);
+        $this->renderLegacyItems((array) ($invoice['items'] ?? []));
+        echo '<p><label><input type="checkbox" name="legacy_confirmation" value="1" required> ' . esc_html__('I explicitly confirm that this profile and these items correspond to the accepted proposal.', 'e7-propostas') . '</label></p>';
+        submit_button(__('Confirm legacy backfill', 'e7-propostas'));
+        echo '</form>';
     }
 
     private function renderPreparation(int $acceptanceId): void
@@ -216,11 +240,13 @@ final class InvoiceAdmin
         }
     }
 
-    private function renderLegacyItems(): void
+    /** @param array<int, mixed> $items */
+    private function renderLegacyItems(array $items = []): void
     {
         echo '<h2>' . esc_html__('Invoice items', 'e7-propostas') . '</h2>';
         for ($index = 0; $index < 5; $index++) {
-            echo '<p><input class="large-text" name="invoice_items[' . $index . '][description]" placeholder="Description"><input name="invoice_items[' . $index . '][amount_minor]" type="number" min="1" step="1" placeholder="Amount minor"></p>';
+            $item = is_array($items[$index] ?? null) ? $items[$index] : [];
+            echo '<p><input class="large-text" name="invoice_items[' . $index . '][description]" value="' . esc_attr((string) ($item['description'] ?? '')) . '" placeholder="Description"><input name="invoice_items[' . $index . '][amount_minor]" value="' . esc_attr((string) ($item['amount_minor'] ?? '')) . '" type="number" min="1" step="1" placeholder="Amount minor"></p>';
         }
     }
 

@@ -88,13 +88,14 @@ final class SchemaRequirementsTest extends TestCase
                 'indexes' => ['version_idempotency' => ['unique' => true, 'columns' => ['version_id', 'idempotency_key']]],
             ],
             'invoices' => [
-                'columns' => ['id', 'acceptance_id', 'version_id', 'public_id', 'invoice_number', 'currency', 'customer_payload', 'supplier_payload', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'vies_status', 'vies_checked_at', 'vies_evidence', 'issued_at', 'cancelled_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'kms_signature', 'provider_message_id', 'last_error', 'replacement_for_id', 'created_at', 'updated_at'],
+                'columns' => ['id', 'acceptance_id', 'version_id', 'public_id', 'invoice_number', 'currency', 'customer_payload', 'supplier_payload', 'items_payload', 'subtotal_minor', 'total_minor', 'status', 'legacy_backfill_required', 'snapshot_hash', 'vies_status', 'vies_checked_at', 'vies_evidence', 'issued_at', 'cancelled_at', 'replaced_at', 'due_at', 'artifact_key', 'artifact_hash', 'kms_signature', 'provider_message_id', 'last_error', 'replacement_for_id', 'created_at', 'updated_at'],
                 'column_definitions' => [
                     'public_id' => ['nullable' => false],
                     'invoice_number' => ['nullable' => true],
                     'customer_payload' => ['nullable' => false],
                     'supplier_payload' => ['nullable' => false],
                     'items_payload' => ['nullable' => false],
+                    'snapshot_hash' => ['nullable' => false],
                 ],
                 'indexes' => [
                     'acceptance_id' => ['unique' => false, 'columns' => ['acceptance_id']],
@@ -107,6 +108,10 @@ final class SchemaRequirementsTest extends TestCase
             'sequences' => [
                 'columns' => ['id', 'sequence_scope', 'sequence_year', 'current_value', 'created_at', 'updated_at'],
                 'indexes' => ['sequence_scope_year' => ['unique' => true, 'columns' => ['sequence_scope', 'sequence_year']]],
+            ],
+            'jobs' => [
+                'columns' => ['id', 'version_id', 'job_type', 'idempotency_key', 'status', 'payload'],
+                'indexes' => ['idempotency_key' => ['unique' => true, 'columns' => ['idempotency_key']]],
             ],
         ];
     }

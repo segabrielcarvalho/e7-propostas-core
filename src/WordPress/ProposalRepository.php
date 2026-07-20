@@ -550,6 +550,16 @@ final class ProposalRepository
         }
     }
 
+    public function withAuditLock(int $versionId, callable $operation): mixed
+    {
+        $lock = $this->acquireAuditLock($versionId);
+        try {
+            return $operation();
+        } finally {
+            $this->releaseAuditLock($lock);
+        }
+    }
+
     private function acquireAuditLock(int $versionId): string
     {
         global $wpdb;

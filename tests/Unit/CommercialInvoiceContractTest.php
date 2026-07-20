@@ -53,11 +53,11 @@ final class CommercialInvoiceContractTest extends TestCase
         self::assertStringContainsString('e7_proposal[invoice_items]', $admin);
     }
 
-    public function test_schema_1_6_completes_invoice_lifecycle_without_a_second_job_table(): void
+    public function test_schema_1_7_hardens_invoice_lifecycle_without_a_second_job_table(): void
     {
         $installer = $this->read('src/WordPress/Installer.php');
 
-        self::assertStringContainsString("SCHEMA_VERSION = '1.6.1'", $installer);
+        self::assertStringContainsString("SCHEMA_VERSION = '1.7.0'", $installer);
         self::assertStringContainsString('business_payload longtext NULL', $installer);
         self::assertStringContainsString('e7_proposal_invoices', $installer);
         self::assertStringContainsString('e7_proposal_invoice_sequences', $installer);

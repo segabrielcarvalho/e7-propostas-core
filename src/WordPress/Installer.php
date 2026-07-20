@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace E7Propostas\WordPress;
 
+use E7Propostas\Domain\CanonicalPayload;
+use E7Propostas\Domain\SupplierProfile;
+use E7Propostas\Infrastructure\Crypto;
+
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.5.2';
+    public const SCHEMA_VERSION = '1.6.0';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -18,6 +22,7 @@ final class Installer
         self::installTables();
         self::migrateInvoiceAcceptanceIndex();
         self::migrateAcceptanceIdempotencyIndex();
+        self::migrateInvoiceRecords();
         self::assertSchemaInstalled();
         update_option('e7_propostas_core_enabled', '1', false);
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
@@ -46,6 +51,7 @@ final class Installer
         self::installTables();
         self::migrateInvoiceAcceptanceIndex();
         self::migrateAcceptanceIdempotencyIndex();
+        self::migrateInvoiceRecords();
         self::assertSchemaInstalled();
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
         self::scheduleRewriteFlush();
@@ -157,13 +163,20 @@ final class Installer
             id bigint unsigned NOT NULL AUTO_INCREMENT,
             acceptance_id bigint unsigned NOT NULL,
             version_id bigint unsigned NOT NULL,
-            invoice_number varchar(64) NOT NULL,
+            public_id char(32) NULL,
+            invoice_number varchar(64) NULL,
             currency char(3) NOT NULL DEFAULT 'EUR',
-            items_payload longtext NOT NULL,
+            customer_payload longtext NULL,
+            supplier_payload longtext NULL,
+            items_payload longtext NULL,
             subtotal_minor bigint unsigned NOT NULL,
             total_minor bigint unsigned NOT NULL,
-            status varchar(20) NOT NULL DEFAULT 'pending',
+            status varchar(20) NOT NULL DEFAULT 'draft',
+            vies_status varchar(20) NOT NULL DEFAULT 'not_requested',
+            vies_checked_at datetime NULL,
+            vies_evidence longtext NULL,
             issued_at datetime NULL,
+            cancelled_at datetime NULL,
             sent_at datetime NULL,
             paid_at datetime NULL,
             voided_at datetime NULL,
@@ -173,11 +186,13 @@ final class Installer
             artifact_hash char(64) NULL,
             kms_signature longtext NULL,
             provider_message_id varchar(255) NULL,
+            last_error text NULL,
             replacement_for_id bigint unsigned NULL,
             created_at datetime NOT NULL,
             updated_at datetime NOT NULL,
             PRIMARY KEY  (id),
             KEY acceptance_id (acceptance_id),
+            UNIQUE KEY public_id (public_id),
             UNIQUE KEY invoice_number (invoice_number),
             UNIQUE KEY replacement_for_id (replacement_for_id),
             KEY version_status (version_id,status)
@@ -264,6 +279,85 @@ final class Installer
                 throw new \RuntimeException('Could not convert the invoice acceptance index.');
             }
         }
+    }
+
+    private static function migrateInvoiceRecords(): void
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'e7_proposal_invoices';
+        $acceptances = $wpdb->prefix . 'e7_proposal_acceptances';
+        $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table)));
+        if ($found !== $table) {
+            return;
+        }
+        $secret = defined('AUTH_KEY') ? (string) AUTH_KEY : wp_salt('auth');
+        $crypto = new Crypto($secret);
+        $rows = $wpdb->get_results("SELECT * FROM $table ORDER BY id ASC", ARRAY_A);
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            $id = (int) $row['id'];
+            $itemsPayload = self::sealLegacyPayload($crypto, $row['items_payload'] ?? null, []);
+            $customerPayload = $row['customer_payload'] ?? null;
+            if (! is_string($customerPayload) || $customerPayload === '') {
+                $customerPayload = $wpdb->get_var($wpdb->prepare("SELECT business_payload FROM $acceptances WHERE id=%d", (int) $row['acceptance_id']));
+            }
+            $customerPayload = self::sealLegacyPayload($crypto, $customerPayload, []);
+            $supplierPayload = self::sealLegacyPayload($crypto, $row['supplier_payload'] ?? null, SupplierProfile::defaults());
+            $status = match ((string) ($row['status'] ?? 'draft')) {
+                'pending' => 'draft',
+                'voided' => 'cancelled',
+                'sent', 'paid' => 'issued',
+                'draft', 'processing', 'issued', 'cancelled', 'failed' => (string) $row['status'],
+                default => 'failed',
+            };
+            $publicId = is_string($row['public_id'] ?? null) && preg_match('/^[a-f0-9]{32}$/', $row['public_id'])
+                ? $row['public_id']
+                : bin2hex(random_bytes(16));
+            $invoiceNumber = isset($row['invoice_number']) && trim((string) $row['invoice_number']) !== '' ? trim((string) $row['invoice_number']) : null;
+            $wpdb->update($table, [
+                'public_id' => $publicId,
+                'invoice_number' => $invoiceNumber,
+                'customer_payload' => $customerPayload,
+                'supplier_payload' => $supplierPayload,
+                'items_payload' => $itemsPayload,
+                'status' => $status,
+                'cancelled_at' => $row['cancelled_at'] ?? ($row['voided_at'] ?? null),
+                'updated_at' => $row['updated_at'] ?? current_time('mysql', true),
+            ], ['id' => $id]);
+            if (is_string($invoiceNumber) && preg_match('/^E7-([0-9]{4})-([0-9]{4})$/', $invoiceNumber, $match)) {
+                self::advanceInvoiceSequence((int) $match[1], (int) $match[2]);
+            }
+        }
+        $escaped = str_replace('`', '``', $table);
+        $wpdb->query("ALTER TABLE `$escaped` MODIFY `public_id` char(32) NOT NULL");
+    }
+
+    /** @param array<string, mixed> $fallback */
+    private static function sealLegacyPayload(Crypto $crypto, mixed $payload, array $fallback): string
+    {
+        if (is_string($payload) && $payload !== '') {
+            try {
+                json_decode($crypto->open($payload), true, 512, JSON_THROW_ON_ERROR);
+                return $payload;
+            } catch (\Throwable) {
+                $decoded = json_decode($payload, true);
+                $fallback = is_array($decoded) ? $decoded : ['legacy_raw' => $payload];
+            }
+        }
+        return $crypto->seal(CanonicalPayload::encode($fallback));
+    }
+
+    private static function advanceInvoiceSequence(int $year, int $value): void
+    {
+        global $wpdb;
+        $table = $wpdb->prefix . 'e7_proposal_invoice_sequences';
+        $now = current_time('mysql', true);
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO $table (sequence_scope,sequence_year,current_value,created_at,updated_at) VALUES ('commercial',%d,%d,%s,%s) ON DUPLICATE KEY UPDATE current_value=GREATEST(current_value,VALUES(current_value)), updated_at=VALUES(updated_at)",
+            $year,
+            $value,
+            $now,
+            $now,
+        ));
     }
 
     private static function assertSchemaInstalled(): void

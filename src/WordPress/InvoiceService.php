@@ -1,0 +1,195 @@
+<?php
+
+declare(strict_types=1);
+
+namespace E7Propostas\WordPress;
+
+use E7Propostas\Domain\BusinessProfile;
+use E7Propostas\Domain\InvoiceItems;
+use E7Propostas\Domain\InvoiceStatus;
+use E7Propostas\Domain\SupplierProfile;
+use E7Propostas\Infrastructure\ViesClient;
+
+final class InvoiceService
+{
+    private readonly \Closure $viesCheck;
+
+    public function __construct(private readonly InvoiceStore $store, ?callable $viesCheck = null)
+    {
+        $this->viesCheck = $viesCheck === null
+            ? \Closure::fromCallable([new ViesClient(), 'check'])
+            : \Closure::fromCallable($viesCheck);
+    }
+
+    /** @param array<string, mixed>|null $legacyProfile @param list<array<string, mixed>>|null $legacyItems @return array<string, mixed> */
+    public function prepareDraft(int $acceptanceId, ?array $legacyProfile, ?array $legacyItems, bool $legacyConfirmed, int $actorId): array
+    {
+        $existing = $this->store->currentRoot($acceptanceId);
+        if (is_array($existing)) {
+            return $existing;
+        }
+        $context = $this->store->acceptanceContext($acceptanceId);
+        if (($context['locale'] ?? null) !== 'en_IE' || ($context['currency'] ?? null) !== 'EUR') {
+            throw new \DomainException('Commercial invoices are available only for en_IE/EUR acceptances.');
+        }
+        $profile = is_array($context['customer_profile'] ?? null) ? $context['customer_profile'] : null;
+        $items = is_array($context['invoice_items'] ?? null) ? $context['invoice_items'] : [];
+        $legacy = $profile === null || $items === [];
+        if ($legacy) {
+            if (! $legacyConfirmed || $legacyProfile === null || $legacyItems === null) {
+                throw new \DomainException('Legacy invoice backfill requires customer data, items and explicit correspondence confirmation.');
+            }
+            $profile = BusinessProfile::normalize($legacyProfile);
+            $items = InvoiceItems::normalize($legacyItems);
+            $this->store->appendAudit((int) $context['version_id'], 'invoice.legacy_backfill_confirmed', [
+                'acceptance_id' => $acceptanceId,
+                'actor_id' => $actorId,
+                'items_total_minor' => InvoiceItems::total($items),
+            ]);
+        } else {
+            $profile = BusinessProfile::normalize($profile);
+            $items = InvoiceItems::normalize($items);
+        }
+        if ($items === []) {
+            throw new \DomainException('Invoice items are required.');
+        }
+        $total = InvoiceItems::total($items);
+        $expected = (int) ($context['invoice_total_minor'] ?? $total);
+        if (! $legacy && $total !== $expected) {
+            throw new \DomainException('Immutable invoice items do not match the accepted total.');
+        }
+        $supplierOption = function_exists('get_option') ? get_option('e7_invoice_supplier_profile', SupplierProfile::defaults()) : SupplierProfile::defaults();
+        $supplier = SupplierProfile::normalize($supplierOption);
+        $invoice = $this->store->createDraft([
+            'acceptance_id' => $acceptanceId,
+            'version_id' => (int) $context['version_id'],
+            'currency' => 'EUR',
+            'customer_profile' => $profile,
+            'supplier_profile' => $supplier,
+            'items' => $items,
+            'total_minor' => $total,
+        ]);
+        $this->store->appendAudit((int) $context['version_id'], 'invoice.draft_prepared', [
+            'invoice_id' => (int) $invoice['id'],
+            'actor_id' => $actorId,
+            'total_minor' => $total,
+        ]);
+        return $invoice;
+    }
+
+    /** @param array<string, mixed> $profile @return array<string, mixed> */
+    public function saveDraftCustomer(int $invoiceId, array $profile, int $actorId): array
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        if ($invoice['status'] !== InvoiceStatus::DRAFT) {
+            throw new \DomainException('Customer data can be corrected only while the invoice is draft.');
+        }
+        $updated = $this->store->updateDraftCustomer($invoiceId, BusinessProfile::normalize($profile));
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.customer_corrected', ['invoice_id' => $invoiceId, 'actor_id' => $actorId]);
+        return $updated;
+    }
+
+    /** @return array<string, mixed> */
+    public function issue(int $invoiceId, bool $viesAcknowledged, int $actorId): array
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        InvoiceStatus::assertTransition((string) $invoice['status'], InvoiceStatus::PROCESSING);
+        $vies = (string) ($invoice['vies_status'] ?? 'not_requested');
+        if (in_array($vies, ['not_requested', 'invalid', 'unavailable'], true)) {
+            if (! $viesAcknowledged) {
+                throw new \DomainException('VIES status requires explicit administrator acknowledgement before issue.');
+            }
+            $this->store->appendAudit((int) $invoice['version_id'], 'invoice.vies_acknowledged', [
+                'invoice_id' => $invoiceId,
+                'actor_id' => $actorId,
+                'vies_status' => $vies,
+            ]);
+        }
+        $processing = $this->store->beginIssue($invoiceId);
+        try {
+            $this->store->enqueueFinalization($invoiceId);
+        } catch (\Throwable $error) {
+            $this->store->markFailed($invoiceId, $error->getMessage());
+            $this->store->appendAudit((int) $invoice['version_id'], 'invoice.finalization_failed', ['invoice_id' => $invoiceId, 'reason_hash' => hash('sha256', $error->getMessage())]);
+            throw $error;
+        }
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.issue_requested', [
+            'invoice_id' => $invoiceId,
+            'invoice_number' => (string) $processing['invoice_number'],
+            'actor_id' => $actorId,
+        ]);
+        return $processing;
+    }
+
+    /** @return array<string, mixed> */
+    public function retry(int $invoiceId, int $actorId): array
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        InvoiceStatus::assertTransition((string) $invoice['status'], InvoiceStatus::PROCESSING);
+        if (! is_string($invoice['invoice_number'] ?? null) || $invoice['invoice_number'] === '') {
+            throw new \DomainException('A failed invoice must retain its reserved number.');
+        }
+        $processing = $this->store->beginRetry($invoiceId);
+        try {
+            $this->store->enqueueFinalization($invoiceId);
+        } catch (\Throwable $error) {
+            $this->store->markFailed($invoiceId, $error->getMessage());
+            throw $error;
+        }
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.retry_requested', ['invoice_id' => $invoiceId, 'actor_id' => $actorId]);
+        return $processing;
+    }
+
+    /** @return array<string, mixed> */
+    public function cancel(int $invoiceId, int $actorId): array
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        InvoiceStatus::assertTransition((string) $invoice['status'], InvoiceStatus::CANCELLED);
+        $cancelled = $this->store->cancel($invoiceId);
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.cancelled', ['invoice_id' => $invoiceId, 'actor_id' => $actorId]);
+        return $cancelled;
+    }
+
+    /** @return array<string, mixed> */
+    public function createReplacement(int $invoiceId, int $actorId): array
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        if (! in_array($invoice['status'], [InvoiceStatus::ISSUED, InvoiceStatus::CANCELLED], true)) {
+            throw new \DomainException('Only an issued or cancelled invoice can be replaced.');
+        }
+        $replacement = $this->store->createReplacement($invoiceId);
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.replacement_created', [
+            'invoice_id' => $invoiceId,
+            'replacement_id' => (int) $replacement['id'],
+            'actor_id' => $actorId,
+        ]);
+        return $replacement;
+    }
+
+    /** @return array<string, mixed> */
+    public function recheckVies(int $invoiceId, int $actorId): array
+    {
+        $invoice = $this->requireInvoice($invoiceId);
+        $profile = is_array($invoice['customer_profile'] ?? null) ? $invoice['customer_profile'] : [];
+        $vat = (string) ($profile['vat_number'] ?? '');
+        $result = ($this->viesCheck)($vat);
+        $updated = $this->store->updateVies($invoiceId, $result);
+        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.vies_checked', [
+            'invoice_id' => $invoiceId,
+            'actor_id' => $actorId,
+            'status' => (string) $result['status'],
+            'evidence_hash' => hash('sha256', json_encode($result['evidence'] ?? [], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)),
+        ]);
+        return $updated;
+    }
+
+    /** @return array<string, mixed> */
+    private function requireInvoice(int $invoiceId): array
+    {
+        $invoice = $this->store->get($invoiceId);
+        if (! is_array($invoice)) {
+            throw new \DomainException('Invoice was not found.');
+        }
+        return $invoice;
+    }
+}

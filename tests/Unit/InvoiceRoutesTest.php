@@ -6,6 +6,7 @@ namespace E7Propostas\Tests\Unit;
 
 use E7Propostas\Infrastructure\ArtifactVerifier;
 use E7Propostas\Infrastructure\InvoiceRoutePolicy;
+use E7Propostas\Infrastructure\InvoiceSignatureEnvelope;
 use PHPUnit\Framework\TestCase;
 
 final class InvoiceRoutesTest extends TestCase
@@ -54,20 +55,36 @@ final class InvoiceRoutesTest extends TestCase
         self::assertFalse(InvoiceRoutePolicy::canCustomerDownload($invoice, ['version_id' => 5]));
     }
 
-    public function test_artifact_verifier_adapts_the_same_hash_signature_contract_to_invoices(): void
+    public function test_invoice_verifier_uses_the_envelope_while_proposals_keep_the_legacy_artifact_hash(): void
     {
         $calls = [];
-        $verifier = new ArtifactVerifier(static function (string $hash, string $signature) use (&$calls): bool {
+        $invoice = $this->invoice();
+        $invoice['signature_payload_hash'] = InvoiceSignatureEnvelope::hash($invoice);
+        $verifier = new ArtifactVerifier(static function (string $hash, string $signature) use (&$calls, $invoice): bool {
             $calls[] = [$hash, $signature];
-            return true;
+            return $hash === $invoice['signature_payload_hash'] || $hash === str_repeat('b', 64);
         });
 
-        self::assertTrue($verifier->verifyInvoice($this->invoice()));
+        self::assertTrue($verifier->verifyInvoice($invoice));
         self::assertTrue($verifier->verify(['artifact_hash' => str_repeat('b', 64), 'kms_signature' => 'proposal-signature']));
         self::assertSame([
-            [str_repeat('a', 64), 'invoice-signature'],
+            [$invoice['signature_payload_hash'], 'invoice-signature'],
             [str_repeat('b', 64), 'proposal-signature'],
         ], $calls);
+    }
+
+    public function test_transplanted_invoice_artifact_signature_is_rejected(): void
+    {
+        $source = $this->invoice();
+        $source['signature_payload_hash'] = InvoiceSignatureEnvelope::hash($source);
+        $verifier = new ArtifactVerifier(static fn (string $hash, string $signature): bool => $hash === $source['signature_payload_hash']);
+
+        self::assertTrue($verifier->verifyInvoice($source));
+
+        $target = $source;
+        $target['public_id'] = str_repeat('e', 32);
+        $target['invoice_number'] = 'E7-2026-4822';
+        self::assertFalse($verifier->verifyInvoice($target));
     }
 
     public function test_plugin_routes_and_admin_download_keep_invoice_artifacts_behind_their_access_contracts(): void
@@ -106,6 +123,7 @@ final class InvoiceRoutesTest extends TestCase
             'id' => 10,
             'version_id' => 5,
             'public_id' => str_repeat('f', 32),
+            'snapshot_hash' => str_repeat('c', 64),
             'invoice_number' => 'E7-2026-4821',
             'issued_at' => '2026-07-20 12:00:00',
             'currency' => 'EUR',

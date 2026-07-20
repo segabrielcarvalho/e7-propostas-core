@@ -33,7 +33,7 @@ final class InvoiceFinalizer
         $this->verificationUrl = \Closure::fromCallable($verificationUrl ?? static fn (string $publicId): string => function_exists('home_url') ? home_url('/invoice/verify/' . $publicId . '/') : 'https://localhost/invoice/verify/' . $publicId . '/');
     }
 
-    /** @param array<string, mixed> $invoice @return array{artifact_key: string, artifact_hash: string, kms_signature: ?string} */
+    /** @param array<string, mixed> $invoice @return array{artifact_key: string, artifact_hash: string, signature_payload_hash: string, kms_signature: ?string, issued_at: string} */
     public function finalize(array $invoice): array
     {
         $environment = (string) ($this->environment)();
@@ -50,13 +50,16 @@ final class InvoiceFinalizer
         }
         $url = (string) ($this->verificationUrl)($publicId);
         $html = $this->htmlRenderer->render($invoice, $url);
+        $issuedAt = trim((string) ($invoice['issued_at'] ?? $invoice['due_at'] ?? ''));
 
         if ($environment === 'local') {
             $path = (string) ($this->localWriter)($publicId, $html);
             if ($path === '') {
                 throw new \RuntimeException('Local invoice artifact was not persisted.');
             }
-            return ['artifact_key' => $path, 'artifact_hash' => hash('sha256', $html), 'kms_signature' => null];
+            $artifactHash = hash('sha256', $html);
+            $payloadHash = InvoiceSignatureEnvelope::hash(array_merge($invoice, ['artifact_hash' => $artifactHash, 'issued_at' => $issuedAt]));
+            return ['artifact_key' => $path, 'artifact_hash' => $artifactHash, 'signature_payload_hash' => $payloadHash, 'kms_signature' => null, 'issued_at' => $issuedAt];
         }
 
         $pdf = (string) ($this->pdfRenderer)($html);
@@ -64,7 +67,8 @@ final class InvoiceFinalizer
             throw new \RuntimeException('Renderer did not return an invoice PDF.');
         }
         $hash = hash('sha256', $pdf);
-        $signature = (string) ($this->signer)($hash);
+        $payloadHash = InvoiceSignatureEnvelope::hash(array_merge($invoice, ['artifact_hash' => $hash, 'issued_at' => $issuedAt]));
+        $signature = (string) ($this->signer)($payloadHash);
         if ($signature === '') {
             throw new \RuntimeException('KMS did not return an invoice signature.');
         }
@@ -73,23 +77,29 @@ final class InvoiceFinalizer
         if ($artifactKey === '') {
             throw new \RuntimeException('Invoice artifact storage did not return an object key.');
         }
-        return ['artifact_key' => $artifactKey, 'artifact_hash' => $hash, 'kms_signature' => $signature];
+        return ['artifact_key' => $artifactKey, 'artifact_hash' => $hash, 'signature_payload_hash' => $payloadHash, 'kms_signature' => $signature, 'issued_at' => $issuedAt];
     }
 
-    /** @param array<string, mixed> $invoice @return array{artifact_key: string, artifact_hash: string, kms_signature: ?string}|null */
+    /** @param array<string, mixed> $invoice @return array{artifact_key: string, artifact_hash: string, signature_payload_hash: string, kms_signature: ?string, issued_at: string}|null */
     private function existingArtifact(array $invoice, string $environment): ?array
     {
         $key = trim((string) ($invoice['artifact_key'] ?? ''));
         $hash = strtolower(trim((string) ($invoice['artifact_hash'] ?? '')));
         $signature = trim((string) ($invoice['kms_signature'] ?? ''));
-        if ($key === '' && $hash === '' && $signature === '') {
+        $payloadHash = strtolower(trim((string) ($invoice['signature_payload_hash'] ?? '')));
+        $issuedAt = trim((string) ($invoice['issued_at'] ?? ''));
+        if ($key === '' && $hash === '' && $signature === '' && $payloadHash === '' && $issuedAt === '') {
             return null;
         }
-        $complete = $key !== '' && preg_match('/^[a-f0-9]{64}$/', $hash) && ($environment === 'local' || $signature !== '');
+        $complete = $key !== '' && preg_match('/^[a-f0-9]{64}$/', $hash) && preg_match('/^[a-f0-9]{64}$/', $payloadHash) && $issuedAt !== '' && ($environment === 'local' || $signature !== '');
         if (! $complete) {
             throw new \RuntimeException('A partial invoice artifact was found; external effects were not repeated.');
         }
-        return ['artifact_key' => $key, 'artifact_hash' => $hash, 'kms_signature' => $signature !== '' ? $signature : null];
+        $expected = InvoiceSignatureEnvelope::hash(array_merge($invoice, ['artifact_hash' => $hash, 'issued_at' => $issuedAt]));
+        if (! hash_equals($expected, $payloadHash)) {
+            throw new \RuntimeException('Invoice artifact signature envelope does not match its invoice.');
+        }
+        return ['artifact_key' => $key, 'artifact_hash' => $hash, 'signature_payload_hash' => $payloadHash, 'kms_signature' => $signature !== '' ? $signature : null, 'issued_at' => $issuedAt];
     }
 
     private function renderPdf(string $html): string

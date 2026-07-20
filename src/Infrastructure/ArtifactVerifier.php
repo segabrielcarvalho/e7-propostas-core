@@ -18,20 +18,26 @@ final class ArtifactVerifier
     /** @param array<string, mixed> $version */
     public function verify(array $version): bool
     {
-        return $this->verifyEvidence($version);
+        return $this->verifyHash((string) ($version['artifact_hash'] ?? ''), (string) ($version['kms_signature'] ?? ''));
     }
 
     /** @param array<string, mixed> $invoice */
     public function verifyInvoice(array $invoice): bool
     {
-        return $this->verifyEvidence($invoice);
+        $payloadHash = strtolower((string) ($invoice['signature_payload_hash'] ?? ''));
+        try {
+            $expected = InvoiceSignatureEnvelope::hash($invoice);
+        } catch (\Throwable) {
+            return false;
+        }
+        if (! preg_match('/^[a-f0-9]{64}$/', $payloadHash) || ! hash_equals($expected, $payloadHash)) {
+            return false;
+        }
+        return $this->verifyHash($payloadHash, (string) ($invoice['kms_signature'] ?? ''));
     }
 
-    /** @param array<string, mixed> $evidence */
-    private function verifyEvidence(array $evidence): bool
+    private function verifyHash(string $hash, string $encodedSignature): bool
     {
-        $hash = (string) ($evidence['artifact_hash'] ?? '');
-        $encodedSignature = (string) ($evidence['kms_signature'] ?? '');
         if (! preg_match('/^[a-f0-9]{64}$/', $hash) || $encodedSignature === '') {
             return false;
         }

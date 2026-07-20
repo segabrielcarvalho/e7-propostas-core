@@ -6,6 +6,7 @@ namespace E7Propostas\Tests\Unit;
 
 use E7Propostas\Infrastructure\InvoiceFinalizer;
 use E7Propostas\Infrastructure\InvoiceHtmlRenderer;
+use E7Propostas\Infrastructure\InvoiceSignatureEnvelope;
 use PHPUnit\Framework\TestCase;
 
 final class InvoiceArtifactTest extends TestCase
@@ -47,7 +48,9 @@ final class InvoiceArtifactTest extends TestCase
             'artifact_key' => 'invoices/' . str_repeat('a', 32) . '.pdf#v1',
             'artifact_hash' => str_repeat('b', 64),
             'kms_signature' => 'signed',
+            'issued_at' => '2026-07-20 12:00:00',
         ];
+        $invoice['signature_payload_hash'] = InvoiceSignatureEnvelope::hash($invoice);
         $effects = 0;
         $finalizer = new InvoiceFinalizer(
             environment: static fn (): string => 'production',
@@ -61,6 +64,7 @@ final class InvoiceArtifactTest extends TestCase
         self::assertSame($invoice['artifact_key'], $artifact['artifact_key']);
         self::assertSame($invoice['artifact_hash'], $artifact['artifact_hash']);
         self::assertSame('signed', $artifact['kms_signature']);
+        self::assertSame($invoice['signature_payload_hash'], $artifact['signature_payload_hash']);
         self::assertSame(0, $effects);
     }
 
@@ -101,6 +105,11 @@ final class InvoiceArtifactTest extends TestCase
         self::assertSame('/private/invoice-' . str_repeat('a', 32) . '.html', $artifact['artifact_key']);
         self::assertSame(hash('sha256', $written['html']), $artifact['artifact_hash']);
         self::assertNull($artifact['kms_signature']);
+        self::assertSame('2026-07-20 12:00:00', $artifact['issued_at']);
+        self::assertSame(
+            InvoiceSignatureEnvelope::hash($this->invoice() + ['artifact_hash' => $artifact['artifact_hash'], 'issued_at' => $artifact['issued_at']]),
+            $artifact['signature_payload_hash'],
+        );
     }
 
     /** @return array<string, mixed> */

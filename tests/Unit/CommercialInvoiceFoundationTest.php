@@ -7,6 +7,7 @@ namespace E7Propostas\Tests\Unit;
 use E7Propostas\Domain\BusinessProfile;
 use E7Propostas\Domain\InvoiceItems;
 use E7Propostas\Infrastructure\FeatureFlags;
+use E7Propostas\WordPress\AcceptancePolicy;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
@@ -26,6 +27,26 @@ final class CommercialInvoiceFoundationTest extends TestCase
         ]);
         self::assertFalse($disabled->otpEnabled());
         self::assertFalse($disabled->finalEmailEnabled());
+    }
+
+    public function test_phone_compatibility_depends_on_otp_and_verified_channel(): void
+    {
+        self::assertTrue(class_exists(AcceptancePolicy::class), 'AcceptancePolicy must exist.');
+
+        self::assertFalse(AcceptancePolicy::phoneRequiredAtSubmission(true));
+        self::assertTrue(AcceptancePolicy::phoneRequiredAtSubmission(false));
+        self::assertFalse(AcceptancePolicy::phoneRequiredForVerifiedChannel(true, 'email'));
+        self::assertTrue(AcceptancePolicy::phoneRequiredForVerifiedChannel(true, 'sms'));
+        self::assertTrue(AcceptancePolicy::phoneRequiredForVerifiedChannel(false, 'email'));
+    }
+
+    public function test_irish_invoice_flow_requires_the_exact_locale_and_currency_pair(): void
+    {
+        self::assertTrue(class_exists(AcceptancePolicy::class), 'AcceptancePolicy must exist.');
+
+        self::assertTrue(AcceptancePolicy::isIrishInvoiceFlow('en_IE', 'EUR'));
+        self::assertFalse(AcceptancePolicy::isIrishInvoiceFlow('en_IE', 'USD'));
+        self::assertFalse(AcceptancePolicy::isIrishInvoiceFlow('pt_BR', 'EUR'));
     }
 
     public function test_business_profile_is_normalized_for_ireland_and_eur(): void
@@ -63,6 +84,16 @@ final class CommercialInvoiceFoundationTest extends TestCase
         yield 'company registration is required' => [[
             'registration_number' => '',
         ]];
+        yield 'company registration contains only CRO digits' => [[
+            'registration_number' => 'CRO-123456',
+        ]];
+        yield 'company registration has a bounded length' => [[
+            'registration_number' => '123456789',
+        ]];
+        yield 'sole trader registration is validated when present' => [[
+            'type' => 'sole_trader',
+            'registration_number' => 'ABC123',
+        ]];
         yield 'vat number is required when registered' => [[
             'vat_registered' => true,
             'vat_number' => '',
@@ -81,6 +112,16 @@ final class CommercialInvoiceFoundationTest extends TestCase
             'payer_same_as_business' => false,
             'payer_legal_name' => '',
         ]];
+        yield 'registered eircode uses the Irish format' => [[
+            'registered_address' => ['eircode' => '12345'],
+        ]];
+        yield 'legal name is bounded' => [[
+            'legal_name' => 'A' . str_repeat('b', 160),
+        ]];
+        yield 'payer legal name is bounded' => [[
+            'payer_same_as_business' => false,
+            'payer_legal_name' => 'A' . str_repeat('b', 160),
+        ]];
         yield 'all confirmations are explicit' => [[
             'confirmations' => ['accuracy' => false],
         ]];
@@ -95,6 +136,19 @@ final class CommercialInvoiceFoundationTest extends TestCase
         $profile['registration_number'] = '';
 
         self::assertSame('', BusinessProfile::normalize($profile)['registration_number']);
+    }
+
+    public function test_valid_sole_trader_registration_and_eircode_are_normalized(): void
+    {
+        $profile = $this->validBusinessProfile();
+        $profile['type'] = 'sole_trader';
+        $profile['registration_number'] = '12345678';
+        $profile['registered_address']['eircode'] = 'd6wyp21';
+
+        $normalized = BusinessProfile::normalize($profile);
+
+        self::assertSame('12345678', $normalized['registration_number']);
+        self::assertSame('D6W YP21', $normalized['registered_address']['eircode']);
     }
 
     public function test_invoice_items_require_descriptions_and_positive_integer_minor_amounts(): void
@@ -152,7 +206,7 @@ final class CommercialInvoiceFoundationTest extends TestCase
                 'line2' => '',
                 'city' => 'Cork',
                 'county' => 'Cork',
-                'eircode' => 'T12 AB34',
+                'eircode' => 'T12 X4P5',
                 'country_code' => 'IE',
             ],
             'billing_same_as_registered' => true,

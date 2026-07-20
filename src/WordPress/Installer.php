@@ -6,7 +6,7 @@ namespace E7Propostas\WordPress;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.5.0';
+    public const SCHEMA_VERSION = '1.5.1';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -16,6 +16,8 @@ final class Installer
         }
 
         self::installTables();
+        self::migrateInvoiceAcceptanceIndex();
+        self::migrateAcceptanceIdempotencyIndex();
         self::assertSchemaInstalled();
         update_option('e7_propostas_core_enabled', '1', false);
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
@@ -42,6 +44,7 @@ final class Installer
             return;
         }
         self::installTables();
+        self::migrateInvoiceAcceptanceIndex();
         self::migrateAcceptanceIdempotencyIndex();
         self::assertSchemaInstalled();
         update_option('e7_propostas_schema_version', self::SCHEMA_VERSION, false);
@@ -174,7 +177,7 @@ final class Installer
             created_at datetime NOT NULL,
             updated_at datetime NOT NULL,
             PRIMARY KEY  (id),
-            UNIQUE KEY acceptance_id (acceptance_id),
+            KEY acceptance_id (acceptance_id),
             UNIQUE KEY invoice_number (invoice_number),
             UNIQUE KEY replacement_for_id (replacement_for_id),
             KEY version_status (version_id,status)
@@ -234,6 +237,10 @@ final class Installer
     private static function migrateAcceptanceIdempotencyIndex(): void
     {
         global $wpdb;
+        $schema = self::inspectSchema();
+        if (! SchemaRequirements::hasIndex($schema, 'acceptances', 'version_idempotency', ['version_id', 'idempotency_key'], true)) {
+            throw new \RuntimeException('Composite acceptance idempotency index is not ready.');
+        }
         $table = $wpdb->prefix . 'e7_proposal_acceptances';
         $legacy = $wpdb->get_var($wpdb->prepare("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = 'idempotency_key' LIMIT 1", $table));
         if ($legacy === 'idempotency_key') {
@@ -241,21 +248,55 @@ final class Installer
         }
     }
 
-    private static function assertSchemaInstalled(): void
+    private static function migrateInvoiceAcceptanceIndex(): void
     {
         global $wpdb;
-        foreach (['e7_proposal_invoices', 'e7_proposal_invoice_sequences'] as $suffix) {
+        $schema = self::inspectSchema();
+        $index = $schema['invoices']['indexes']['acceptance_id'] ?? null;
+        if (is_array($index) && ($index['unique'] ?? false) === true) {
+            $table = str_replace('`', '``', $wpdb->prefix . 'e7_proposal_invoices');
+            if ($wpdb->query("ALTER TABLE `$table` DROP INDEX `acceptance_id`, ADD KEY `acceptance_id` (`acceptance_id`)") === false) {
+                throw new \RuntimeException('Could not convert the invoice acceptance index.');
+            }
+        }
+    }
+
+    private static function assertSchemaInstalled(): void
+    {
+        SchemaRequirements::assertReady(self::inspectSchema());
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private static function inspectSchema(): array
+    {
+        global $wpdb;
+        $schema = [];
+        foreach (['acceptances' => 'e7_proposal_acceptances', 'invoices' => 'e7_proposal_invoices', 'sequences' => 'e7_proposal_invoice_sequences'] as $name => $suffix) {
             $table = $wpdb->prefix . $suffix;
             $found = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table)));
             if ($found !== $table) {
-                throw new \RuntimeException('Required proposal schema table was not installed: ' . $suffix);
+                $schema[$name] = ['columns' => [], 'indexes' => []];
+                continue;
             }
+            $escaped = str_replace('`', '``', $table);
+            $columns = $wpdb->get_results("SHOW COLUMNS FROM `$escaped`", ARRAY_A);
+            $rows = $wpdb->get_results("SHOW INDEX FROM `$escaped`", ARRAY_A);
+            $indexes = [];
+            foreach (is_array($rows) ? $rows : [] as $row) {
+                $key = (string) $row['Key_name'];
+                $indexes[$key]['unique'] = (int) $row['Non_unique'] === 0;
+                $indexes[$key]['columns'][(int) $row['Seq_in_index']] = (string) $row['Column_name'];
+            }
+            foreach ($indexes as &$index) {
+                ksort($index['columns'], SORT_NUMERIC);
+                $index['columns'] = array_values($index['columns']);
+            }
+            unset($index);
+            $schema[$name] = [
+                'columns' => array_values(array_map(static fn (array $column): string => (string) $column['Field'], is_array($columns) ? $columns : [])),
+                'indexes' => $indexes,
+            ];
         }
-
-        $acceptances = str_replace('`', '``', $wpdb->prefix . 'e7_proposal_acceptances');
-        $column = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM `$acceptances` LIKE %s", 'business_payload'));
-        if ($column !== 'business_payload') {
-            throw new \RuntimeException('Required acceptance business_payload column was not installed.');
-        }
+        return $schema;
     }
 }

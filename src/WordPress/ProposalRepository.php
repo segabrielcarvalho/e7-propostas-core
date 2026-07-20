@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace E7Propostas\WordPress;
 
 use E7Propostas\Domain\AuditChain;
+use E7Propostas\Domain\CanonicalPayload;
 use E7Propostas\Domain\InvoiceItems;
 use E7Propostas\Domain\OtpDestination;
 use E7Propostas\Domain\SnapshotHasher;
@@ -406,6 +407,19 @@ final class ProposalRepository
             }
             $publicId = bin2hex(random_bytes(16));
             $acceptedAt = current_time('mysql', true);
+            $snapshot = json_decode((string) $version['snapshot_json'], true, 512, JSON_THROW_ON_ERROR);
+            $metadata = is_array($snapshot['metadata'] ?? null) ? $snapshot['metadata'] : [];
+            $businessProfileHash = $businessProfile === null ? null : CanonicalPayload::hash($businessProfile);
+            $invoiceTotal = (int) ($metadata['invoice_total_minor'] ?? 0);
+            $versionNumber = (int) $version['version_no'];
+            $acceptanceContextHash = CanonicalPayload::hash([
+                'business_profile' => $businessProfile,
+                'invoice_total_minor' => $invoiceTotal,
+                'version' => $versionNumber,
+            ]);
+            // Crypto::seal authenticates the ciphertext; this audited canonical hash binds
+            // the plaintext to its proposal/invoice context without changing Crypto's API.
+            $sealedBusinessProfile = $businessProfile === null ? null : $this->crypto->seal(CanonicalPayload::encode($businessProfile));
             if ($otpRequired) {
                 $this->appendAudit($versionId, 'otp.verified', ['otp_id' => $otpId], true);
             } else {
@@ -416,6 +430,10 @@ final class ProposalRepository
                 'accepted_at' => $acceptedAt,
                 'signer_name' => $signer['name'],
                 'consent' => $consent,
+                'business_profile_hash' => $businessProfileHash,
+                'acceptance_context_hash' => $acceptanceContextHash,
+                'invoice_total_minor' => $invoiceTotal,
+                'version' => $versionNumber,
             ], true);
             $this->mustWrite($wpdb->insert($acceptances, [
                 'version_id' => $versionId,
@@ -426,7 +444,7 @@ final class ProposalRepository
                 'signer_company' => $signer['company'],
                 'signer_email' => $signer['email'],
                 'signer_phone' => $signer['phone'],
-                'business_payload' => $businessProfile === null ? null : $this->crypto->seal((string) wp_json_encode($businessProfile)),
+                'business_payload' => $sealedBusinessProfile,
                 'consent_text' => $consent,
                 'accepted_at' => $acceptedAt,
                 'ip_address' => $ip,

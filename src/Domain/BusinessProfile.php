@@ -29,6 +29,9 @@ final class BusinessProfile
         if ($type === 'company' && $registration === '') {
             throw new \InvalidArgumentException('registration_number is required for a company.');
         }
+        if ($registration !== '' && ! preg_match('/^[0-9]{1,8}$/', $registration)) {
+            throw new \InvalidArgumentException('registration_number must contain between 1 and 8 CRO digits.');
+        }
 
         $vatRegistered = self::boolean($input['vat_registered'] ?? null, 'vat_registered');
         $vat = strtoupper(str_replace([' ', '-', '.'], '', self::text($input['vat_number'] ?? '')));
@@ -45,7 +48,7 @@ final class BusinessProfile
             ? $registered
             : self::address($input['billing_address'] ?? null, 'billing_address');
         $payerSame = self::boolean($input['payer_same_as_business'] ?? null, 'payer_same_as_business');
-        $payerLegalName = self::text($input['payer_legal_name'] ?? '');
+        $payerLegalName = self::optionalText($input['payer_legal_name'] ?? '', 160, 'payer_legal_name');
         if (! $payerSame && $payerLegalName === '') {
             throw new \InvalidArgumentException('payer_legal_name is required when the payer differs from the business.');
         }
@@ -65,8 +68,8 @@ final class BusinessProfile
         return [
             'responsible' => $responsible,
             'type' => $type,
-            'legal_name' => self::requiredText($input['legal_name'] ?? null, 'legal_name'),
-            'trading_name' => self::requiredText($input['trading_name'] ?? null, 'trading_name'),
+            'legal_name' => self::requiredTextWithLimit($input['legal_name'] ?? null, 160, 'legal_name'),
+            'trading_name' => self::requiredTextWithLimit($input['trading_name'] ?? null, 160, 'trading_name'),
             'registration_number' => $registration,
             'vat_registered' => $vatRegistered,
             'vat_number' => $vat,
@@ -97,7 +100,7 @@ final class BusinessProfile
             'line2' => self::optionalText($address['line2'] ?? '', 190, $field . '.line2'),
             'city' => self::requiredText($address['city'] ?? null, $field . '.city'),
             'county' => self::requiredText($address['county'] ?? null, $field . '.county'),
-            'eircode' => self::requiredText($address['eircode'] ?? null, $field . '.eircode'),
+            'eircode' => self::eircode($address['eircode'] ?? null, $field . '.eircode'),
             'country_code' => 'IE',
         ];
     }
@@ -124,11 +127,25 @@ final class BusinessProfile
 
     private static function requiredText(mixed $value, string $field): string
     {
-        $text = self::optionalText($value, 190, $field);
+        return self::requiredTextWithLimit($value, 190, $field);
+    }
+
+    private static function requiredTextWithLimit(mixed $value, int $maxLength, string $field): string
+    {
+        $text = self::optionalText($value, $maxLength, $field);
         if ($text === '') {
             throw new \InvalidArgumentException($field . ' is required.');
         }
         return $text;
+    }
+
+    private static function eircode(mixed $value, string $field): string
+    {
+        $eircode = strtoupper(str_replace([' ', '-'], '', self::text($value)));
+        if (! preg_match('/^(?:[AC-FHKNPRTV-Y][0-9]{2}|D6W)[0-9AC-FHKNPRTV-Y]{4}$/', $eircode)) {
+            throw new \InvalidArgumentException($field . ' must be a valid Irish Eircode.');
+        }
+        return substr($eircode, 0, 3) . ' ' . substr($eircode, 3);
     }
 
     private static function optionalText(mixed $value, int $maxLength, string $field): string

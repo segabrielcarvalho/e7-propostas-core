@@ -6,12 +6,14 @@ namespace E7Propostas\WordPress;
 
 use DateTimeImmutable;
 use DateTimeZone;
+use E7Propostas\Domain\BusinessProfile;
 use E7Propostas\Domain\OtpChallenge;
 use E7Propostas\Domain\OtpDestination;
 use E7Propostas\Domain\OtpService;
 use E7Propostas\Domain\PasswordService;
 use E7Propostas\Infrastructure\DeliveryService;
 use E7Propostas\Infrastructure\ArtifactVerifier;
+use E7Propostas\Infrastructure\FeatureFlags;
 
 final class RestController
 {
@@ -23,14 +25,17 @@ final class RestController
         private readonly OtpService $otps,
         private readonly DeliveryService $delivery,
         private readonly ArtifactVerifier $artifactVerifier,
+        private readonly FeatureFlags $features,
     ) {
     }
 
     public function register(): void
     {
         register_rest_route(self::NAMESPACE, '/access/password', ['methods' => 'POST', 'callback' => [$this, 'access'], 'permission_callback' => [$this, 'sameOrigin']]);
-        register_rest_route(self::NAMESPACE, '/otp/send', ['methods' => 'POST', 'callback' => [$this, 'sendOtp'], 'permission_callback' => [$this, 'authorizedRequest']]);
-        register_rest_route(self::NAMESPACE, '/otp/verify', ['methods' => 'POST', 'callback' => [$this, 'verifyOtp'], 'permission_callback' => [$this, 'authorizedRequest']]);
+        if ($this->features->otpEnabled()) {
+            register_rest_route(self::NAMESPACE, '/otp/send', ['methods' => 'POST', 'callback' => [$this, 'sendOtp'], 'permission_callback' => [$this, 'authorizedRequest']]);
+            register_rest_route(self::NAMESPACE, '/otp/verify', ['methods' => 'POST', 'callback' => [$this, 'verifyOtp'], 'permission_callback' => [$this, 'authorizedRequest']]);
+        }
         register_rest_route(self::NAMESPACE, '/accept', ['methods' => 'POST', 'callback' => [$this, 'accept'], 'permission_callback' => [$this, 'authorizedRequest']]);
         register_rest_route(self::NAMESPACE, '/verify/(?P<document_id>[a-f0-9]{32})', ['methods' => 'GET', 'callback' => [$this, 'verify'], 'permission_callback' => '__return_true']);
     }
@@ -90,6 +95,9 @@ final class RestController
 
     public function sendOtp(\WP_REST_Request $request): \WP_REST_Response|\WP_Error
     {
+        if (! $this->features->otpEnabled()) {
+            return new \WP_Error('rest_no_route', __('Rota não encontrada.', 'e7-propostas'), ['status' => 404]);
+        }
         $sessionRaw = self::sessionCookie();
         $session = $this->repository->findSession($sessionRaw);
         if (! is_array($session)) {
@@ -139,6 +147,9 @@ final class RestController
 
     public function verifyOtp(\WP_REST_Request $request): \WP_REST_Response|\WP_Error
     {
+        if (! $this->features->otpEnabled()) {
+            return new \WP_Error('rest_no_route', __('Rota não encontrada.', 'e7-propostas'), ['status' => 404]);
+        }
         $session = $this->repository->findSession(self::sessionCookie());
         if (! is_array($session)) {
             return $this->genericError(403);
@@ -175,18 +186,36 @@ final class RestController
         if (! is_array($session)) {
             return $this->genericError(403);
         }
-        $name = sanitize_text_field((string) $request->get_param('name'));
-        $role = sanitize_text_field((string) $request->get_param('role'));
-        $company = sanitize_text_field((string) $request->get_param('company'));
-        if ($name === '' || filter_var($request->get_param('consent'), FILTER_VALIDATE_BOOLEAN) !== true) {
-            return new \WP_Error('e7_acceptance_fields', __('Informe seu nome e confirme o aceite.', 'e7-propostas'), ['status' => 422]);
+        $version = $this->repository->getVersion((int) $session['version_id']);
+        if (! is_array($version)) {
+            return $this->genericError(409);
         }
+        $settings = $this->repository->getSettings((int) $version['post_id']);
+        $businessProfile = null;
         try {
-            $email = OtpDestination::from('email', (string) $request->get_param('email'))->value;
-            $phoneRaw = trim((string) $request->get_param('phone'));
-            $phone = $phoneRaw === '' ? '' : OtpDestination::from('sms', $phoneRaw)->value;
+            if (($settings['locale'] ?? '') === 'en_IE' && ($settings['currency'] ?? '') === 'EUR') {
+                $businessProfile = BusinessProfile::normalize($request->get_param('business_profile'));
+                $responsible = $businessProfile['responsible'];
+                $name = (string) $responsible['name'];
+                $role = (string) $responsible['role'];
+                $email = (string) $responsible['email'];
+                $phone = (string) $responsible['phone'];
+                $company = (string) $businessProfile['legal_name'];
+            } else {
+                $name = sanitize_text_field((string) $request->get_param('name'));
+                $role = sanitize_text_field((string) $request->get_param('role'));
+                $company = sanitize_text_field((string) $request->get_param('company'));
+                $email = OtpDestination::from('email', (string) $request->get_param('email'))->value;
+                $phone = OtpDestination::from('sms', (string) $request->get_param('phone'))->value;
+                if ($name === '') {
+                    throw new \InvalidArgumentException('Signer name is required.');
+                }
+            }
         } catch (\InvalidArgumentException) {
-            return new \WP_Error('e7_acceptance_fields', __('Informe um e-mail válido.', 'e7-propostas'), ['status' => 422]);
+            return new \WP_Error('e7_acceptance_fields', __('Confira os dados obrigatórios do responsável e da empresa.', 'e7-propostas'), ['status' => 422]);
+        }
+        if (filter_var($request->get_param('consent'), FILTER_VALIDATE_BOOLEAN) !== true) {
+            return new \WP_Error('e7_acceptance_fields', __('Confirme o aceite para continuar.', 'e7-propostas'), ['status' => 422]);
         }
         $idempotency = sanitize_text_field($request->get_header('idempotency-key'));
         if (! preg_match('/^[A-Za-z0-9_-]{16,128}$/', $idempotency)) {
@@ -197,28 +226,33 @@ final class RestController
         if (is_array($existing)) {
             return new \WP_REST_Response(['ok' => true, 'document_id' => $existing['public_id'], 'verify_url' => home_url('/verify/' . $existing['public_id'] . '/'), 'download_url' => home_url('/download/' . $existing['public_id'] . '/')], 200);
         }
-        $version = $this->repository->getVersion((int) $session['version_id']);
-        $settings = is_array($version) ? $this->repository->getSettings((int) $version['post_id']) : [];
+        if ($version['status'] !== 'active' || $this->repository->isVersionExpired($version)) {
+            return $this->genericError(409);
+        }
         $consent = ($settings['locale'] ?? 'pt_BR') === 'en_IE'
             ? 'I have read and accept this proposal and agree to the use of electronic records and signatures.'
             : 'Li e aceito esta proposta e concordo com o uso de registros e assinaturas eletrônicas.';
         try {
-            $acceptance = $this->repository->withOtpLock((int) $session['version_id'], function () use ($session, $request, $settings, $email, $phone, $idempotencyHash, $name, $role, $company, $consent): array {
-                $otp = $this->repository->latestOtp((int) $session['id'], (int) $session['version_id']);
-                if (! is_array($otp)) {
-                    throw new \UnexpectedValueException('otp_required');
-                }
-                $this->assertOtpContactBinding($settings, $otp, $email, $phone);
-                $verification = $this->verifyChallenge($otp, (string) $request->get_param('otp'));
-                if (! $verification->isValid) {
-                    if ($verification->reason === 'invalid' || $verification->reason === 'locked') {
-                        $this->repository->recordOtpFailure((int) $otp['id'], (int) $otp['attempts']);
+            if ($this->features->otpEnabled()) {
+                $acceptance = $this->repository->withOtpLock((int) $session['version_id'], function () use ($session, $request, $settings, $email, $phone, $idempotencyHash, $name, $role, $company, $consent, $businessProfile): array {
+                    $otp = $this->repository->latestOtp((int) $session['id'], (int) $session['version_id']);
+                    if (! is_array($otp)) {
+                        throw new \UnexpectedValueException('otp_required');
                     }
-                    $this->repository->appendAudit((int) $session['version_id'], 'otp.denied', ['reason' => $verification->reason, 'attempts' => $verification->challenge->attempts]);
-                    throw new \UnexpectedValueException('otp_invalid');
-                }
-                return $this->repository->accept((int) $session['version_id'], (int) $otp['id'], (int) $otp['attempts'], $idempotencyHash, ['name' => $name, 'role' => $role, 'company' => $company, 'email' => $email, 'phone' => $phone], $consent, $this->clientIp(), $this->userAgent());
-            });
+                    $this->assertOtpContactBinding($settings, $otp, $email, $phone);
+                    $verification = $this->verifyChallenge($otp, (string) $request->get_param('otp'));
+                    if (! $verification->isValid) {
+                        if ($verification->reason === 'invalid' || $verification->reason === 'locked') {
+                            $this->repository->recordOtpFailure((int) $otp['id'], (int) $otp['attempts']);
+                        }
+                        $this->repository->appendAudit((int) $session['version_id'], 'otp.denied', ['reason' => $verification->reason, 'attempts' => $verification->challenge->attempts]);
+                        throw new \UnexpectedValueException('otp_invalid');
+                    }
+                    return $this->repository->accept((int) $session['version_id'], (int) $otp['id'], (int) $otp['attempts'], $idempotencyHash, ['name' => $name, 'role' => $role, 'company' => $company, 'email' => $email, 'phone' => $phone], $consent, $this->clientIp(), $this->userAgent(), $businessProfile, true);
+                });
+            } else {
+                $acceptance = $this->repository->accept((int) $session['version_id'], null, null, $idempotencyHash, ['name' => $name, 'role' => $role, 'company' => $company, 'email' => $email, 'phone' => $phone], $consent, $this->clientIp(), $this->userAgent(), $businessProfile, false);
+            }
         } catch (\InvalidArgumentException) {
             return new \WP_Error('e7_otp_contact', __('Os dados do signatário não correspondem ao destino validado.', 'e7-propostas'), ['status' => 422]);
         } catch (\UnexpectedValueException $error) {
@@ -229,7 +263,7 @@ final class RestController
         } catch (\DomainException $error) {
             return new \WP_Error('e7_already_accepted', __('Esta proposta não está mais disponível para aceite.', 'e7-propostas'), ['status' => 409]);
         } catch (\Throwable) {
-            return new \WP_Error('e7_otp_unavailable', __('Não foi possível concluir o aceite. Tente novamente.', 'e7-propostas'), ['status' => 503]);
+            return new \WP_Error('e7_acceptance_unavailable', __('Não foi possível concluir o aceite. Tente novamente.', 'e7-propostas'), ['status' => 503]);
         }
         return new \WP_REST_Response(['ok' => true, 'document_id' => $acceptance['public_id'], 'verify_url' => home_url('/verify/' . $acceptance['public_id'] . '/'), 'download_url' => home_url('/download/' . $acceptance['public_id'] . '/')], 201);
     }

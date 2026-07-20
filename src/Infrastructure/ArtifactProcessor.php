@@ -11,7 +11,7 @@ use E7Propostas\WordPress\ProposalRepository;
 
 final class ArtifactProcessor
 {
-    public function __construct(private readonly ProposalRepository $repository)
+    public function __construct(private readonly ProposalRepository $repository, private readonly FeatureFlags $features)
     {
     }
 
@@ -47,7 +47,7 @@ final class ArtifactProcessor
     }
 
     /** @param array<string, mixed> $job */
-    private function finalize(array $job): string
+    private function finalize(array $job): ?string
     {
         global $wpdb;
         $payload = json_decode((string) $job['payload'], true, 512, JSON_THROW_ON_ERROR);
@@ -96,7 +96,12 @@ final class ArtifactProcessor
         if ($updated !== 1) {
             throw new \RuntimeException('Could not persist the final artifact.');
         }
-        $providerId = $this->sendFinalEmail($acceptance, $pdf, $region);
+        $providerId = null;
+        if ($this->features->finalEmailEnabled()) {
+            $providerId = $this->sendFinalEmail($acceptance, $pdf, $region);
+        } else {
+            $this->repository->appendAudit((int) $job['version_id'], 'final_email.skipped', ['reason' => 'feature_disabled']);
+        }
         $this->repository->appendAudit((int) $job['version_id'], 'artifact.finalized', ['artifact_hash' => $hash, 's3_key' => $key, 'provider_message_id' => $providerId]);
         return $providerId;
     }

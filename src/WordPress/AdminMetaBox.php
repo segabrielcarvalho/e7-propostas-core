@@ -53,7 +53,14 @@ final class AdminMetaBox
         foreach (['BRL', 'EUR', 'USD'] as $value) {
             printf('<option value="%s" %s>%s</option>', esc_attr($value), selected(($settings['currency'] ?? 'BRL'), $value, false), esc_html($value));
         }
-        echo '</select></p><p><label for="e7_password"><strong>' . esc_html__('Senha da proposta', 'e7-propostas') . '</strong><span class="e7-required-marker" aria-hidden="true">*</span></label><br><input class="widefat" id="e7_password" name="e7_proposal[password]" type="password" autocomplete="new-password" placeholder="' . esc_attr(($settings['password_hash'] ?? '') !== '' ? __('Definida — deixe vazio para manter', 'e7-propostas') : __('Defina uma senha', 'e7-propostas')) . '"><br><small>' . esc_html__('Obrigatório para gerar o link', 'e7-propostas') . '</small></p>';
+        echo '</select></p><hr><fieldset data-field="e7_proposal[invoice_items]"><legend><strong>' . esc_html__('Itens da fatura', 'e7-propostas') . '</strong></legend><p><small>' . esc_html__('Use valores inteiros na menor unidade da moeda (por exemplo, 12500 = 125,00). Obrigatório ao publicar em en_IE/EUR.', 'e7-propostas') . '</small></p>';
+        $invoiceItems = is_array($settings['invoice_items'] ?? null) ? $settings['invoice_items'] : [];
+        $rows = max(1, count($invoiceItems) + 1);
+        for ($index = 0; $index < $rows; $index++) {
+            $item = is_array($invoiceItems[$index] ?? null) ? $invoiceItems[$index] : [];
+            printf('<div><label for="e7_invoice_description_%1$d">%2$s</label><input class="widefat" id="e7_invoice_description_%1$d" name="e7_proposal[invoice_items][%1$d][description]" type="text" maxlength="500" value="%3$s"><label for="e7_invoice_amount_%1$d">%4$s</label><input class="widefat" id="e7_invoice_amount_%1$d" name="e7_proposal[invoice_items][%1$d][amount_minor]" type="number" min="1" step="1" value="%5$s"></div>', $index, esc_html__('Descrição', 'e7-propostas'), esc_attr((string) ($item['description'] ?? '')), esc_html__('Valor em unidade menor', 'e7-propostas'), esc_attr((string) ($item['amount_minor'] ?? '')));
+        }
+        echo '</fieldset><p><label for="e7_password"><strong>' . esc_html__('Senha da proposta', 'e7-propostas') . '</strong><span class="e7-required-marker" aria-hidden="true">*</span></label><br><input class="widefat" id="e7_password" name="e7_proposal[password]" type="password" autocomplete="new-password" placeholder="' . esc_attr(($settings['password_hash'] ?? '') !== '' ? __('Definida — deixe vazio para manter', 'e7-propostas') : __('Defina uma senha', 'e7-propostas')) . '"><br><small>' . esc_html__('Obrigatório para gerar o link', 'e7-propostas') . '</small></p>';
         if (is_array($version) && $code !== null) {
             $url = home_url('/p/' . $code . '/');
             echo '<hr><p><strong>' . esc_html__('Link privado atual', 'e7-propostas') . '</strong></p><input class="widefat" type="text" readonly value="' . esc_attr($url) . '"><p><small>' . esc_html(sprintf(__('Versão %d · %s', 'e7-propostas'), (int) $version['version_no'], (string) $version['status'])) . '</small></p>';
@@ -71,6 +78,18 @@ final class AdminMetaBox
             return;
         }
         $input = isset($_POST['e7_proposal']) && is_array($_POST['e7_proposal']) ? wp_unslash($_POST['e7_proposal']) : [];
+        $invoiceItems = is_array($input['invoice_items'] ?? null) ? $input['invoice_items'] : [];
+        foreach ($invoiceItems as &$item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $amount = filter_var($item['amount_minor'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if (is_int($amount)) {
+                $item['amount_minor'] = $amount;
+            }
+        }
+        unset($item);
+        $input['invoice_items'] = array_values($invoiceItems);
         $password = (string) ($input['password'] ?? '');
         try {
             $this->repository->saveSettings($postId, $input, $password !== '' ? $this->passwords->hash($password) : null);

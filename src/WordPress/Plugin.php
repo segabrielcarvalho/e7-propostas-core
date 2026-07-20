@@ -15,6 +15,7 @@ use E7Propostas\Infrastructure\ArtifactVerifier;
 use E7Propostas\Infrastructure\ArtifactDownload;
 use E7Propostas\Infrastructure\Crypto;
 use E7Propostas\Infrastructure\DeliveryService;
+use E7Propostas\Infrastructure\FeatureFlags;
 
 final class Plugin
 {
@@ -42,6 +43,7 @@ final class Plugin
             $tokens = new TokenService(wp_salt('secure_auth'));
             $repository = new ProposalRepository($crypto, $tokens, new SnapshotHasher(), new AuditChain(), new ShareCodeService());
             $artifactVerifier = new ArtifactVerifier();
+            $features = new FeatureFlags();
             $passwords = new PasswordService();
             $admin = new AdminMetaBox($repository, $passwords);
             $adminList = new ProposalAdminList($repository);
@@ -49,8 +51,8 @@ final class Plugin
             $duplicator = new ProposalDuplicator($repository);
             $publisher = new SnapshotPublisher($repository);
             $routes = new PublicRoutes($repository, $artifactVerifier, new ArtifactDownload());
-            $rest = new RestController($repository, $passwords, new OtpService(wp_salt('logged_in')), new DeliveryService(), $artifactVerifier);
-            $artifacts = new ArtifactProcessor($repository);
+            $rest = new RestController($repository, $passwords, new OtpService(wp_salt('logged_in')), new DeliveryService(), $artifactVerifier, $features);
+            $artifacts = new ArtifactProcessor($repository, $features);
             $migration = new ProposalMigrationCommand($repository, $passwords);
 
             add_action('init', [ProposalPostType::class, 'register']);

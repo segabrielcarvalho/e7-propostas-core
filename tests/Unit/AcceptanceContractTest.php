@@ -157,15 +157,15 @@ final class AcceptanceContractTest extends TestCase
         self::assertStringContainsString('destination varchar(254)', $installer);
     }
 
-    public function test_email_acceptance_allows_an_empty_phone_while_sms_binding_remains_available(): void
+    public function test_non_irish_acceptance_requires_email_and_international_phone_while_irish_uses_the_business_profile(): void
     {
         $controller = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/RestController.php');
 
         self::assertIsString($controller);
-        self::assertStringContainsString("\$phoneRaw === '' ? '' : OtpDestination::from('sms', \$phoneRaw)->value", $controller);
+        self::assertStringContainsString("\$phone = OtpDestination::from('sms', (string) \$request->get_param('phone'))->value", $controller);
+        self::assertStringContainsString("BusinessProfile::normalize(\$request->get_param('business_profile'))", $controller);
         self::assertStringContainsString("\$channel === 'email'", $controller);
         self::assertStringContainsString("\$channel === 'sms'", $controller);
-        self::assertStringNotContainsString('Informe um e-mail e um telefone válidos.', $controller);
     }
 
     public function test_sms_uses_an_application_specific_sender_id(): void

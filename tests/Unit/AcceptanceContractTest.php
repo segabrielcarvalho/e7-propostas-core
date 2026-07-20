@@ -8,6 +8,16 @@ use PHPUnit\Framework\TestCase;
 
 final class AcceptanceContractTest extends TestCase
 {
+    public function test_reopening_an_accepted_proposal_keeps_the_full_document_screen(): void
+    {
+        $routes = file_get_contents(dirname(__DIR__, 2) . '/src/WordPress/PublicRoutes.php');
+
+        self::assertIsString($routes);
+        self::assertStringContainsString("'screen' => \$authorized ? 'proposal' : 'password'", $routes);
+        self::assertStringNotContainsString("? ((string) \$version['status'] === 'accepted' ? 'complete' : 'proposal')", $routes);
+        self::assertStringContainsString("'acceptance' => \$authorized ? \$acceptance : null", $routes);
+    }
+
     public function testRendererUsesTheOfficialBrowserlessPdfPayload(): void
     {
         $source = file_get_contents(__DIR__ . '/../../src/Infrastructure/ArtifactProcessor.php');

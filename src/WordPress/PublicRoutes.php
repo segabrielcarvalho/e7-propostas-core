@@ -72,7 +72,7 @@ final class PublicRoutes
         $acceptance = (string) $version['status'] === 'accepted' ? $this->repository->findAcceptanceByVersion((int) $version['id']) : null;
         $pageTitle = get_the_title((int) $version['post_id']);
         self::$view = [
-            'screen' => $authorized ? ((string) $version['status'] === 'accepted' ? 'complete' : 'proposal') : 'password',
+            'screen' => $authorized ? 'proposal' : 'password',
             'code' => strtolower($code),
             'page_title' => is_string($pageTitle) ? $pageTitle : '',
             'version' => $authorized ? $version : null,

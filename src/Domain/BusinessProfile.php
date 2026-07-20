@@ -34,12 +34,9 @@ final class BusinessProfile
         }
 
         $vatRegistered = self::boolean($input['vat_registered'] ?? null, 'vat_registered');
-        $vat = strtoupper(str_replace([' ', '-', '.'], '', self::text($input['vat_number'] ?? '')));
-        if ($vatRegistered && ! preg_match('/^IE[A-Z0-9]{7,10}$/', $vat)) {
-            throw new \InvalidArgumentException('vat_number is required and must be a valid Irish VAT format when vat_registered is true.');
-        }
-        if (! $vatRegistered) {
-            $vat = '';
+        $vat = $vatRegistered ? IrishVatNumber::normalize($input['vat_number'] ?? '') : null;
+        if ($vatRegistered && $vat === null) {
+            throw new \InvalidArgumentException('vat_number is required when vat_registered is true.');
         }
 
         $registered = self::address($input['registered_address'] ?? null, 'registered_address');
@@ -72,7 +69,7 @@ final class BusinessProfile
             'trading_name' => self::optionalText($input['trading_name'] ?? '', 160, 'trading_name'),
             'registration_number' => $registration,
             'vat_registered' => $vatRegistered,
-            'vat_number' => $vat,
+            'vat_number' => $vat ?? '',
             'registered_address' => $registered,
             'billing_same_as_registered' => $billingSame,
             'billing_address' => $billing,

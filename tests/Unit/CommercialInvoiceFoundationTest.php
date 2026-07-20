@@ -59,6 +59,7 @@ final class CommercialInvoiceFoundationTest extends TestCase
         self::assertSame('aoife@example.ie', $profile['responsible']['email']);
         self::assertSame('+353871234567', $profile['responsible']['phone']);
         self::assertSame('company', $profile['type']);
+        self::assertSame('IE1234567A', $profile['vat_number']);
         self::assertSame('IE', $profile['registered_address']['country_code']);
         self::assertSame($profile['registered_address'], $profile['billing_address']);
         self::assertSame('rossmotorcycles.ie', $profile['domain']);
@@ -112,6 +113,10 @@ final class CommercialInvoiceFoundationTest extends TestCase
         yield 'vat number is required when registered' => [[
             'vat_registered' => true,
             'vat_number' => '',
+        ]];
+        yield 'vat number follows the official Irish formats used by VIES' => [[
+            'vat_registered' => true,
+            'vat_number' => 'IEABCDEFG',
         ]];
         yield 'responsible email is valid' => [[
             'responsible' => ['email' => 'not-an-email'],

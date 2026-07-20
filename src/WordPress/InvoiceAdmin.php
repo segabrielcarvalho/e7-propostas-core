@@ -108,7 +108,7 @@ final class InvoiceAdmin
         echo '<h2>' . esc_html((string) ($invoice['invoice_number'] ?: __('Draft invoice', 'e7-propostas'))) . '</h2>';
         echo '<p><strong>' . esc_html__('Status', 'e7-propostas') . ':</strong> ' . esc_html($status) . '</p>';
         echo '<p><strong>Public ID:</strong> <code>' . esc_html((string) $invoice['public_id']) . '</code></p>';
-        if (! empty($invoice['legacy_backfill_required'])) {
+        if (! empty($invoice['legacy_backfill_required']) && $status === 'draft') {
             $this->renderLegacyBackfill($invoice);
             return;
         }

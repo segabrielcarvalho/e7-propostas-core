@@ -60,6 +60,18 @@ final class InvoiceRepository implements InvoiceStore
         return is_array($row) ? $this->hydrate($row) : null;
     }
 
+    public function verifiedInvoice(int $invoiceId): array
+    {
+        global $wpdb;
+        $table = $this->table('e7_proposal_invoices');
+        $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d", $invoiceId), ARRAY_A);
+        if (! is_array($row)) {
+            throw new \DomainException('Invoice was not found.');
+        }
+        $this->assertSnapshotIntegrity($row);
+        return $this->hydrate($row);
+    }
+
     public function findByPost(int $postId): ?array
     {
         global $wpdb;
@@ -196,34 +208,44 @@ final class InvoiceRepository implements InvoiceStore
         });
     }
 
-    public function backfillLegacy(int $invoiceId, array $profile, array $items, int $totalMinor): array
+    public function backfillLegacy(int $invoiceId, array $profile, array $items, int $totalMinor, int $actorId): array
     {
         global $wpdb;
-        return $this->withLock('e7-invoice-record-' . $invoiceId, function () use ($wpdb, $invoiceId, $profile, $items, $totalMinor): array {
-            $table = $this->table('e7_proposal_invoices');
-            $wpdb->query('START TRANSACTION');
-            try {
-                $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d FOR UPDATE", $invoiceId), ARRAY_A);
-                if (! is_array($row) || $row['status'] !== 'draft' || (int) $row['legacy_backfill_required'] !== 1) {
-                    throw new \DomainException('Legacy invoice backfill is no longer available.');
+        return $this->withLock('e7-invoice-record-' . $invoiceId, function () use ($wpdb, $invoiceId, $profile, $items, $totalMinor, $actorId): array {
+            $candidate = $this->requireInvoice($invoiceId);
+            return $this->proposals->withAuditLock((int) $candidate['version_id'], function () use ($wpdb, $invoiceId, $profile, $items, $totalMinor, $actorId): array {
+                $table = $this->table('e7_proposal_invoices');
+                $wpdb->query('START TRANSACTION');
+                try {
+                    $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d FOR UPDATE", $invoiceId), ARRAY_A);
+                    if (! is_array($row) || $row['status'] !== 'draft' || (int) $row['legacy_backfill_required'] !== 1) {
+                        throw new \DomainException('Legacy invoice backfill is no longer available.');
+                    }
+                    $supplier = $this->openArray((string) $row['supplier_payload']);
+                    $snapshotHash = InvoiceSnapshot::hash((string) $row['public_id'], (int) $row['acceptance_id'], (int) $row['version_id'], (string) $row['currency'], $totalMinor, $profile, $supplier, $items);
+                    $this->mustWrite($wpdb->update($table, [
+                        'customer_payload' => $this->seal($profile),
+                        'items_payload' => $this->seal($items),
+                        'subtotal_minor' => $totalMinor,
+                        'total_minor' => $totalMinor,
+                        'legacy_backfill_required' => 0,
+                        'snapshot_hash' => $snapshotHash,
+                        'updated_at' => current_time('mysql', true),
+                    ], ['id' => $invoiceId, 'status' => 'draft', 'legacy_backfill_required' => 1]));
+                    $this->proposals->appendAudit((int) $row['version_id'], 'invoice.legacy_backfill_confirmed', [
+                        'invoice_id' => $invoiceId,
+                        'acceptance_id' => (int) $row['acceptance_id'],
+                        'actor_id' => $actorId,
+                        'items_total_minor' => $totalMinor,
+                        'snapshot_hash' => $snapshotHash,
+                    ], true);
+                    $wpdb->query('COMMIT');
+                } catch (\Throwable $error) {
+                    $wpdb->query('ROLLBACK');
+                    throw $error;
                 }
-                $supplier = $this->openArray((string) $row['supplier_payload']);
-                $snapshotHash = InvoiceSnapshot::hash((string) $row['public_id'], (int) $row['acceptance_id'], (int) $row['version_id'], (string) $row['currency'], $totalMinor, $profile, $supplier, $items);
-                $this->mustWrite($wpdb->update($table, [
-                    'customer_payload' => $this->seal($profile),
-                    'items_payload' => $this->seal($items),
-                    'subtotal_minor' => $totalMinor,
-                    'total_minor' => $totalMinor,
-                    'legacy_backfill_required' => 0,
-                    'snapshot_hash' => $snapshotHash,
-                    'updated_at' => current_time('mysql', true),
-                ], ['id' => $invoiceId, 'status' => 'draft', 'legacy_backfill_required' => 1]));
-                $wpdb->query('COMMIT');
-            } catch (\Throwable $error) {
-                $wpdb->query('ROLLBACK');
-                throw $error;
-            }
-            return $this->requireInvoice($invoiceId);
+                return $this->requireInvoice($invoiceId);
+            });
         });
     }
 
@@ -344,17 +366,32 @@ final class InvoiceRepository implements InvoiceStore
     public function markIssued(int $invoiceId, array $artifact): array
     {
         global $wpdb;
-        $now = current_time('mysql', true);
-        $this->mustWrite($wpdb->update($this->table('e7_proposal_invoices'), [
-            'status' => 'issued',
-            'issued_at' => $now,
-            'artifact_key' => $artifact['artifact_key'] ?? null,
-            'artifact_hash' => $artifact['artifact_hash'] ?? null,
-            'kms_signature' => $artifact['kms_signature'] ?? null,
-            'last_error' => null,
-            'updated_at' => $now,
-        ], ['id' => $invoiceId, 'status' => 'processing']));
-        return $this->requireInvoice($invoiceId);
+        return $this->withLock('e7-invoice-record-' . $invoiceId, function () use ($wpdb, $invoiceId, $artifact): array {
+            $table = $this->table('e7_proposal_invoices');
+            $wpdb->query('START TRANSACTION');
+            try {
+                $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id=%d FOR UPDATE", $invoiceId), ARRAY_A);
+                if (! is_array($row) || $row['status'] !== 'processing') {
+                    throw new \DomainException('Only a processing invoice can be issued.');
+                }
+                $this->assertSnapshotIntegrity($row);
+                $now = current_time('mysql', true);
+                $this->mustWrite($wpdb->update($table, [
+                    'status' => 'issued',
+                    'issued_at' => $now,
+                    'artifact_key' => $artifact['artifact_key'] ?? null,
+                    'artifact_hash' => $artifact['artifact_hash'] ?? null,
+                    'kms_signature' => $artifact['kms_signature'] ?? null,
+                    'last_error' => null,
+                    'updated_at' => $now,
+                ], ['id' => $invoiceId, 'status' => 'processing']));
+                $wpdb->query('COMMIT');
+            } catch (\Throwable $error) {
+                $wpdb->query('ROLLBACK');
+                throw $error;
+            }
+            return $this->requireInvoice($invoiceId);
+        });
     }
 
     public function appendAudit(int $versionId, string $type, array $payload): void

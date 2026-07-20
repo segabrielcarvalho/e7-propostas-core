@@ -12,6 +12,8 @@ interface InvoiceStore
     public function currentRoot(int $acceptanceId): ?array;
     /** @return array<string, mixed>|null */
     public function get(int $invoiceId): ?array;
+    /** Returns an invoice only after validating its canonical snapshot hash. @return array<string, mixed> */
+    public function verifiedInvoice(int $invoiceId): array;
     /** @param array<string, mixed> $snapshot @return array<string, mixed> */
     public function createDraft(array $snapshot): array;
     /** @param array<string, mixed> $profile @return array<string, mixed> */
@@ -24,7 +26,7 @@ interface InvoiceStore
     /** Atomically transitions a failed invoice and resets its single finalize_invoice job. @return array<string, mixed> */
     public function retryAndEnqueue(int $invoiceId): array;
     /** @param array<string, mixed> $profile @param list<array<string, mixed>> $items @return array<string, mixed> */
-    public function backfillLegacy(int $invoiceId, array $profile, array $items, int $totalMinor): array;
+    public function backfillLegacy(int $invoiceId, array $profile, array $items, int $totalMinor, int $actorId): array;
     /** @return array<string, mixed> */
     public function cancel(int $invoiceId): array;
     /** @return array<string, mixed> */

@@ -66,14 +66,7 @@ final class InvoiceService
             'legacy_backfill_required' => $legacy,
         ]);
         if ($legacy) {
-            $invoice = $this->store->backfillLegacy((int) $invoice['id'], $profile, $items, $total);
-            $this->store->appendAudit((int) $context['version_id'], 'invoice.legacy_backfill_confirmed', [
-                'invoice_id' => (int) $invoice['id'],
-                'acceptance_id' => $acceptanceId,
-                'actor_id' => $actorId,
-                'items_total_minor' => $total,
-                'snapshot_hash' => (string) $invoice['snapshot_hash'],
-            ]);
+            $invoice = $this->store->backfillLegacy((int) $invoice['id'], $profile, $items, $total, $actorId);
         }
         $this->store->appendAudit((int) $context['version_id'], 'invoice.draft_prepared', [
             'invoice_id' => (int) $invoice['id'],
@@ -153,14 +146,7 @@ final class InvoiceService
             throw new \DomainException('Legacy invoice items are required.');
         }
         $total = InvoiceItems::total($normalizedItems);
-        $updated = $this->store->backfillLegacy($invoiceId, $normalizedProfile, $normalizedItems, $total);
-        $this->store->appendAudit((int) $invoice['version_id'], 'invoice.legacy_backfill_confirmed', [
-            'invoice_id' => $invoiceId,
-            'actor_id' => $actorId,
-            'items_total_minor' => $total,
-            'snapshot_hash' => (string) $updated['snapshot_hash'],
-        ]);
-        return $updated;
+        return $this->store->backfillLegacy($invoiceId, $normalizedProfile, $normalizedItems, $total, $actorId);
     }
 
     /** @param array<string, string|null> $artifact @return array<string, mixed> */
@@ -200,7 +186,7 @@ final class InvoiceService
     /** @return array<string, mixed> */
     public function invoice(int $invoiceId): array
     {
-        return $this->requireInvoice($invoiceId);
+        return $this->store->verifiedInvoice($invoiceId);
     }
 
     /** @return array<string, mixed> */

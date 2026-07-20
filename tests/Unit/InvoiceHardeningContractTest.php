@@ -59,6 +59,32 @@ final class InvoiceHardeningContractTest extends TestCase
         self::assertStringContainsString('true)', $replacement);
     }
 
+    public function test_legacy_backfill_persistence_marker_and_audit_are_committed_together(): void
+    {
+        $repository = $this->read('src/WordPress/InvoiceRepository.php');
+        $start = (int) strpos($repository, 'public function backfillLegacy');
+        $backfill = substr($repository, $start, 5000);
+
+        self::assertStringContainsString('withAuditLock', $backfill);
+        self::assertStringContainsString("'invoice.legacy_backfill_confirmed'", $backfill);
+        self::assertStringContainsString('true)', $backfill);
+        self::assertStringContainsString("query('ROLLBACK')", $backfill);
+        self::assertLessThan(strpos($backfill, "query('COMMIT')"), strpos($backfill, "'invoice.legacy_backfill_confirmed'"));
+    }
+
+    public function test_mark_issued_revalidates_snapshot_under_transaction_and_record_lock(): void
+    {
+        $repository = $this->read('src/WordPress/InvoiceRepository.php');
+        $start = (int) strpos($repository, 'public function markIssued');
+        $markIssued = substr($repository, $start, 4000);
+
+        self::assertStringContainsString('e7-invoice-record-', $markIssued);
+        self::assertStringContainsString("query('START TRANSACTION')", $markIssued);
+        self::assertStringContainsString('FOR UPDATE', $markIssued);
+        self::assertStringContainsString('assertSnapshotIntegrity', $markIssued);
+        self::assertLessThan(strpos($markIssued, "'status' => 'issued'"), strpos($markIssued, 'assertSnapshotIntegrity'));
+    }
+
     public function test_migration_checks_record_and_sequence_writes(): void
     {
         $installer = $this->read('src/WordPress/Installer.php');
@@ -82,6 +108,12 @@ final class InvoiceHardeningContractTest extends TestCase
         self::assertStringContainsString("notice === 'error'", $admin);
         self::assertStringContainsString('notice-error', $admin);
         self::assertStringContainsString("'backfill_legacy'", $admin);
+    }
+
+    public function test_admin_only_renders_legacy_backfill_for_drafts(): void
+    {
+        $admin = $this->read('src/WordPress/InvoiceAdmin.php');
+        self::assertStringContainsString("! empty(\$invoice['legacy_backfill_required']) && \$status === 'draft'", $admin);
     }
 
     private function read(string $path): string

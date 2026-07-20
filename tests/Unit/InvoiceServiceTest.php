@@ -163,6 +163,46 @@ final class InvoiceServiceTest extends TestCase
         self::assertContains('invoice.issued', array_column($store->audits, 'type'));
     }
 
+    public function test_worker_invoice_read_rejects_a_transplanted_snapshot_ciphertext(): void
+    {
+        $store = new InMemoryInvoiceStore($this->context());
+        $store->invoice = $store->createDraft([
+            'acceptance_id' => 41, 'version_id' => 5, 'currency' => 'EUR',
+            'customer_profile' => $this->profile(), 'supplier_profile' => [],
+            'items' => $this->items(), 'total_minor' => 127500,
+        ]);
+        $store->integrityValid = false;
+
+        $this->expectException(\DomainException::class);
+        $this->expectExceptionMessage('integrity');
+        (new InvoiceService($store))->invoice(10);
+    }
+
+    public function test_transplanted_snapshot_cannot_be_marked_issued(): void
+    {
+        $store = new InMemoryInvoiceStore($this->context());
+        $store->invoice = $store->createDraft([
+            'acceptance_id' => 41, 'version_id' => 5, 'currency' => 'EUR',
+            'customer_profile' => $this->profile(), 'supplier_profile' => [],
+            'items' => $this->items(), 'total_minor' => 127500,
+        ]);
+        $store->invoice['status'] = 'processing';
+        $store->invoice['invoice_number'] = 'E7-2026-4821';
+        $store->integrityValid = false;
+
+        try {
+            (new InvoiceService($store))->markIssued(10, [
+                'artifact_key' => 'invoices/example.pdf',
+                'artifact_hash' => str_repeat('a', 64),
+            ]);
+            self::fail('A transplanted ciphertext must never be issued.');
+        } catch (\DomainException $error) {
+            self::assertStringContainsString('integrity', $error->getMessage());
+        }
+
+        self::assertSame('processing', $store->invoice['status']);
+    }
+
     public function test_finalizer_failure_is_exposed_without_clearing_reserved_number(): void
     {
         $store = new InMemoryInvoiceStore($this->context());
@@ -272,6 +312,7 @@ final class InMemoryInvoiceStore implements InvoiceStore
     /** @var list<int> */
     public array $jobs = [];
     public bool $failEnqueue = false;
+    public bool $integrityValid = true;
     public int $atomicCalls = 0;
 
     /** @param array<string, mixed> $context */
@@ -282,6 +323,12 @@ final class InMemoryInvoiceStore implements InvoiceStore
     public function acceptanceContext(int $acceptanceId): array { return $this->context; }
     public function currentRoot(int $acceptanceId): ?array { return $this->invoice; }
     public function get(int $invoiceId): ?array { return $this->invoice; }
+    public function verifiedInvoice(int $invoiceId): array
+    {
+        if (! $this->integrityValid) { throw new \DomainException('Invoice snapshot integrity check failed.'); }
+        if (! is_array($this->invoice)) { throw new \DomainException('Invoice was not found.'); }
+        return $this->invoice;
+    }
     public function createDraft(array $snapshot): array
     {
         return $this->invoice = $snapshot + ['id' => 10, 'status' => 'draft', 'invoice_number' => null, 'vies_status' => 'not_requested', 'legacy_backfill_required' => false, 'snapshot_hash' => str_repeat('a', 64)];
@@ -298,7 +345,12 @@ final class InMemoryInvoiceStore implements InvoiceStore
         return $this->invoice;
     }
     public function markFailed(int $invoiceId, string $message): void { $this->invoice['status'] = 'failed'; }
-    public function markIssued(int $invoiceId, array $artifact): array { $this->invoice = array_merge($this->invoice, $artifact, ['status' => 'issued']); return $this->invoice; }
+    public function markIssued(int $invoiceId, array $artifact): array
+    {
+        if (! $this->integrityValid) { throw new \DomainException('Invoice snapshot integrity check failed.'); }
+        $this->invoice = array_merge($this->invoice, $artifact, ['status' => 'issued']);
+        return $this->invoice;
+    }
     public function beginRetry(int $invoiceId): array { $this->invoice['status'] = 'processing'; return $this->invoice; }
     public function cancel(int $invoiceId): array { $this->invoice['status'] = 'cancelled'; return $this->invoice; }
     public function createReplacement(int $invoiceId, int $actorId = 0): array { return $this->invoice; }
@@ -325,7 +377,7 @@ final class InMemoryInvoiceStore implements InvoiceStore
         $this->jobs = [$invoiceId];
         return $this->invoice;
     }
-    public function backfillLegacy(int $invoiceId, array $profile, array $items, int $totalMinor): array
+    public function backfillLegacy(int $invoiceId, array $profile, array $items, int $totalMinor, int $actorId): array
     {
         if (empty($this->invoice['legacy_backfill_required'])) { throw new \DomainException('already backfilled'); }
         $this->invoice['customer_profile'] = $profile;
@@ -333,6 +385,12 @@ final class InMemoryInvoiceStore implements InvoiceStore
         $this->invoice['total_minor'] = $totalMinor;
         $this->invoice['legacy_backfill_required'] = false;
         $this->invoice['snapshot_hash'] = hash('sha256', json_encode([$profile, $items, $totalMinor]));
+        $this->appendAudit((int) $this->invoice['version_id'], 'invoice.legacy_backfill_confirmed', [
+            'invoice_id' => $invoiceId,
+            'actor_id' => $actorId,
+            'items_total_minor' => $totalMinor,
+            'snapshot_hash' => $this->invoice['snapshot_hash'],
+        ]);
         return $this->invoice;
     }
     public function appendAudit(int $versionId, string $type, array $payload): void { $this->audits[] = compact('type', 'payload'); }

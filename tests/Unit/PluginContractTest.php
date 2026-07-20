@@ -60,6 +60,7 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString('XMLRPC_REQUEST', $hardening);
         self::assertStringContainsString("add_filter('xmlrpc_methods'", $hardening);
         self::assertStringContainsString("unset(\$headers['X-Pingback'])", $hardening);
+        self::assertStringContainsString("header_remove('X-Powered-By')", $hardening);
         self::assertStringContainsString('FilesMatch', $uploads);
         self::assertMatchesRegularExpression('/php\\[0-9\\]/', $uploads);
         self::assertStringContainsString('e7-proposals-import', $uploads);

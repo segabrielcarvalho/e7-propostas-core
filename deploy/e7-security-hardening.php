@@ -6,6 +6,10 @@
 
 declare(strict_types=1);
 
+if (function_exists('header_remove')) {
+    header_remove('X-Powered-By');
+}
+
 if (defined('XMLRPC_REQUEST') && XMLRPC_REQUEST) {
     status_header(403);
     nocache_headers();
@@ -15,6 +19,11 @@ if (defined('XMLRPC_REQUEST') && XMLRPC_REQUEST) {
 add_filter('xmlrpc_enabled', '__return_false', PHP_INT_MAX);
 add_filter('xmlrpc_methods', static fn (array $methods): array => []);
 add_filter('pings_open', '__return_false', PHP_INT_MAX);
+add_action('send_headers', static function (): void {
+    if (function_exists('header_remove')) {
+        header_remove('X-Powered-By');
+    }
+}, PHP_INT_MAX);
 add_filter('wp_headers', static function (array $headers): array {
     unset($headers['X-Pingback']);
     $headers['X-Content-Type-Options'] = 'nosniff';

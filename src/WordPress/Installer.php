@@ -5,13 +5,14 @@ declare(strict_types=1);
 namespace E7Propostas\WordPress;
 
 use E7Propostas\Domain\CanonicalPayload;
+use E7Propostas\Domain\InvoiceJobCanonicalizer;
 use E7Propostas\Domain\InvoiceSnapshot;
 use E7Propostas\Domain\SupplierProfile;
 use E7Propostas\Infrastructure\Crypto;
 
 final class Installer
 {
-    public const SCHEMA_VERSION = '1.7.1';
+    public const SCHEMA_VERSION = '1.7.2';
 
     public static function activate(bool $networkWide = false): void
     {
@@ -416,23 +417,111 @@ final class Installer
         global $wpdb;
         $jobs = $wpdb->prefix . 'e7_proposal_jobs';
         $invoices = $wpdb->prefix . 'e7_proposal_invoices';
-        $rows = $wpdb->get_results("SELECT id, payload FROM $jobs WHERE job_type='finalize_invoice' AND idempotency_key IS NULL ORDER BY id ASC", ARRAY_A);
-        foreach (is_array($rows) ? $rows : [] as $row) {
-            $payload = json_decode((string) $row['payload'], true);
+        $invoiceRows = $wpdb->get_results("SELECT id, version_id, public_id, status FROM $invoices ORDER BY id ASC", ARRAY_A);
+        $jobRows = $wpdb->get_results("SELECT id, version_id, idempotency_key, status, attempts, next_run_at, locked_at, payload, last_error, created_at, updated_at FROM $jobs WHERE job_type='finalize_invoice' ORDER BY id ASC", ARRAY_A);
+        $byId = [];
+        $byPublicId = [];
+        foreach (is_array($invoiceRows) ? $invoiceRows : [] as $invoice) {
+            $byId[(int) $invoice['id']] = $invoice;
+            $byPublicId[(string) $invoice['public_id']] = $invoice;
+        }
+
+        $grouped = [];
+        foreach (is_array($jobRows) ? $jobRows : [] as $job) {
+            $payload = json_decode((string) $job['payload'], true);
+            $invoiceId = is_array($payload) ? (int) ($payload['invoice_id'] ?? 0) : 0;
             $publicId = is_array($payload) ? (string) ($payload['public_id'] ?? '') : '';
-            if (! preg_match('/^[a-f0-9]{32}$/', $publicId) && is_array($payload) && isset($payload['invoice_id'])) {
-                $publicId = (string) $wpdb->get_var($wpdb->prepare("SELECT public_id FROM $invoices WHERE id=%d", (int) $payload['invoice_id']));
-            }
-            if (! preg_match('/^[a-f0-9]{32}$/', $publicId)) {
-                $result = $wpdb->update($jobs, ['status' => 'failed', 'last_error' => 'Invoice job payload could not be identified during migration.'], ['id' => (int) $row['id']]);
+            $byInvoiceId = $byId[$invoiceId] ?? null;
+            $byPayloadPublicId = preg_match('/^[a-f0-9]{32}$/', $publicId) ? ($byPublicId[$publicId] ?? null) : null;
+            if (is_array($byInvoiceId) && is_array($byPayloadPublicId) && (int) $byInvoiceId['id'] !== (int) $byPayloadPublicId['id']) {
+                $invoice = null;
             } else {
-                $key = hash('sha256', 'finalize_invoice:' . $publicId);
-                $existing = $wpdb->get_var($wpdb->prepare("SELECT id FROM $jobs WHERE idempotency_key=%s LIMIT 1", $key));
-                $data = is_numeric($existing)
-                    ? ['status' => 'superseded', 'last_error' => 'Duplicate invoice job superseded during idempotency migration.']
-                    : ['idempotency_key' => $key];
-                $result = $wpdb->update($jobs, $data, ['id' => (int) $row['id']]);
+                $invoice = is_array($byInvoiceId) ? $byInvoiceId : $byPayloadPublicId;
             }
+            if (! is_array($invoice)) {
+                $result = $wpdb->update($jobs, [
+                    'idempotency_key' => null,
+                    'status' => 'failed',
+                    'last_error' => 'Invoice job payload could not be identified during migration.',
+                ], ['id' => (int) $job['id']]);
+                if ($result === false) {
+                    throw new \RuntimeException('Invoice job idempotency migration failed.');
+                }
+                continue;
+            }
+            $grouped[(string) $invoice['public_id']][] = $job;
+        }
+
+        foreach ($byPublicId as $publicId => $invoice) {
+            $invoiceJobs = $grouped[$publicId] ?? [];
+            $selection = InvoiceJobCanonicalizer::choose($invoiceJobs, (string) $invoice['status']);
+            $canonicalId = $selection['canonical_id'];
+            if ($canonicalId === null && ! $selection['rebuild']) {
+                continue;
+            }
+            $key = hash('sha256', 'finalize_invoice:' . $publicId);
+            $now = current_time('mysql', true);
+            $payload = wp_json_encode(['invoice_id' => (int) $invoice['id'], 'public_id' => $publicId]);
+            if (! is_string($payload)) {
+                throw new \RuntimeException('Invoice job idempotency migration failed.');
+            }
+
+            foreach ($invoiceJobs as $job) {
+                $result = $wpdb->update($jobs, ['idempotency_key' => null], ['id' => (int) $job['id']]);
+                if ($result === false) {
+                    throw new \RuntimeException('Invoice job idempotency migration failed.');
+                }
+            }
+            if ($canonicalId === null) {
+                $result = $wpdb->insert($jobs, [
+                    'version_id' => (int) $invoice['version_id'],
+                    'job_type' => 'finalize_invoice',
+                    'idempotency_key' => $key,
+                    'status' => 'pending',
+                    'attempts' => 0,
+                    'next_run_at' => $now,
+                    'locked_at' => null,
+                    'payload' => $payload,
+                    'last_error' => null,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                if ($result === false) {
+                    throw new \RuntimeException('Invoice job idempotency migration failed.');
+                }
+                continue;
+            }
+
+            foreach ($invoiceJobs as $job) {
+                if ((int) $job['id'] === $canonicalId) {
+                    continue;
+                }
+                $result = $wpdb->update($jobs, [
+                    'status' => 'superseded',
+                    'last_error' => 'Duplicate invoice job superseded during idempotency migration.',
+                    'locked_at' => null,
+                    'updated_at' => $now,
+                ], ['id' => (int) $job['id']]);
+                if ($result === false) {
+                    throw new \RuntimeException('Invoice job idempotency migration failed.');
+                }
+            }
+            $canonical = [
+                'version_id' => (int) $invoice['version_id'],
+                'idempotency_key' => $key,
+                'payload' => $payload,
+                'updated_at' => $now,
+            ];
+            if ($selection['rebuild']) {
+                $canonical += [
+                    'status' => 'pending',
+                    'attempts' => 0,
+                    'next_run_at' => $now,
+                    'locked_at' => null,
+                    'last_error' => null,
+                ];
+            }
+            $result = $wpdb->update($jobs, $canonical, ['id' => $canonicalId]);
             if ($result === false) {
                 throw new \RuntimeException('Invoice job idempotency migration failed.');
             }

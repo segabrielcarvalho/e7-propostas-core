@@ -57,7 +57,7 @@ final class CommercialInvoiceContractTest extends TestCase
     {
         $installer = $this->read('src/WordPress/Installer.php');
 
-        self::assertStringContainsString("SCHEMA_VERSION = '1.7.1'", $installer);
+        self::assertStringContainsString("SCHEMA_VERSION = '1.7.2'", $installer);
         self::assertStringContainsString('business_payload longtext NULL', $installer);
         self::assertStringContainsString('e7_proposal_invoices', $installer);
         self::assertStringContainsString('e7_proposal_invoice_sequences', $installer);

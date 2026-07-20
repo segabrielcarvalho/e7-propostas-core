@@ -97,6 +97,7 @@ final class InvoiceHardeningContractTest extends TestCase
     {
         $installer = $this->read('src/WordPress/Installer.php');
         self::assertStringContainsString('migrateInvoiceJobKeys', $installer);
+        self::assertStringContainsString('InvoiceJobCanonicalizer::choose', $installer);
         self::assertStringContainsString("'superseded'", $installer);
         self::assertStringContainsString('Invoice job idempotency migration failed.', $installer);
         self::assertStringContainsString("'finalize_invoice:'", $installer);

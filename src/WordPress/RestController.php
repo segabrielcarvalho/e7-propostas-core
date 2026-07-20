@@ -183,9 +183,10 @@ final class RestController
         }
         try {
             $email = OtpDestination::from('email', (string) $request->get_param('email'))->value;
-            $phone = OtpDestination::from('sms', (string) $request->get_param('phone'))->value;
+            $phoneRaw = trim((string) $request->get_param('phone'));
+            $phone = $phoneRaw === '' ? '' : OtpDestination::from('sms', $phoneRaw)->value;
         } catch (\InvalidArgumentException) {
-            return new \WP_Error('e7_acceptance_fields', __('Informe um e-mail e um telefone válidos.', 'e7-propostas'), ['status' => 422]);
+            return new \WP_Error('e7_acceptance_fields', __('Informe um e-mail válido.', 'e7-propostas'), ['status' => 422]);
         }
         $idempotency = sanitize_text_field($request->get_header('idempotency-key'));
         if (! preg_match('/^[A-Za-z0-9_-]{16,128}$/', $idempotency)) {
@@ -294,11 +295,11 @@ final class RestController
     {
         $configuredEmail = trim((string) ($settings['client_email'] ?? ''));
         $configuredPhone = trim((string) ($settings['client_phone'] ?? ''));
-        if (($configuredEmail !== '' && strcasecmp($configuredEmail, $email) !== 0)
-            || ($configuredPhone !== '' && ! hash_equals($configuredPhone, $phone))) {
+        $channel = (string) ($otp['channel'] ?? '');
+        if (($channel === 'email' && $configuredEmail !== '' && strcasecmp($configuredEmail, $email) !== 0)
+            || ($channel === 'sms' && $configuredPhone !== '' && ! hash_equals($configuredPhone, $phone))) {
             throw new \InvalidArgumentException('Signer contact does not match proposal settings.');
         }
-        $channel = (string) ($otp['channel'] ?? '');
         $destination = (string) ($otp['destination'] ?? '');
         $submitted = $channel === 'email' ? $email : ($channel === 'sms' ? $phone : '');
         $matches = $channel === 'email' ? strcasecmp($destination, $submitted) === 0 : hash_equals($destination, $submitted);

@@ -177,6 +177,42 @@ final class ProposalRepository
         return is_string($code) && $code !== '' ? strtolower($code) : null;
     }
 
+    public function restoreShareCode(int $postId, string $code): void
+    {
+        global $wpdb;
+        $normalized = $this->shareCodes->normalize($code);
+        if ($normalized === null) {
+            throw new \InvalidArgumentException('Invalid proposal share code.');
+        }
+
+        $table = $this->table('e7_proposal_settings');
+        $owner = $wpdb->get_var($wpdb->prepare("SELECT post_id FROM $table WHERE LOWER(share_code) = %s LIMIT 1", $normalized));
+        if ($owner !== null && (int) $owner !== $postId) {
+            throw new \DomainException('Share code is already assigned to another proposal.');
+        }
+
+        $current = $wpdb->get_var($wpdb->prepare("SELECT share_code FROM $table WHERE post_id = %d LIMIT 1", $postId));
+        if (is_string($current) && $current !== '') {
+            if (! hash_equals(strtolower($current), $normalized)) {
+                throw new \DomainException('An imported proposal cannot change its stable share code.');
+            }
+            return;
+        }
+
+        $updated = $wpdb->query($wpdb->prepare(
+            "UPDATE $table SET share_code = %s WHERE post_id = %d AND share_code IS NULL",
+            $normalized,
+            $postId,
+        ));
+        if ($updated !== 1) {
+            $owner = $wpdb->get_var($wpdb->prepare("SELECT post_id FROM $table WHERE LOWER(share_code) = %s LIMIT 1", $normalized));
+            if ($owner !== null && (int) $owner !== $postId) {
+                throw new \DomainException('Share code is already assigned to another proposal.');
+            }
+            throw new \RuntimeException('Could not restore the proposal share code.');
+        }
+    }
+
     /** @return array<string, mixed>|null */
     public function findCurrentByShareCode(string $code): ?array
     {

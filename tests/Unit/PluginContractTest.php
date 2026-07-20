@@ -121,6 +121,18 @@ final class PluginContractTest extends TestCase
         self::assertStringContainsString('wp_delete_post', $cleanup);
     }
 
+    public function test_cli_migration_preserves_an_existing_stable_share_code(): void
+    {
+        $migration = $this->read('src/WordPress/ProposalMigrationCommand.php');
+        $repository = $this->read('src/WordPress/ProposalRepository.php');
+
+        self::assertStringContainsString("'share_code'", $migration);
+        self::assertStringContainsString('restoreShareCode', $migration);
+        self::assertStringContainsString('public function restoreShareCode', $repository);
+        self::assertStringContainsString('$this->shareCodes->normalize($code)', $repository);
+        self::assertStringContainsString('Share code is already assigned to another proposal.', $repository);
+    }
+
     public function test_exposes_only_versioned_public_workflow_routes(): void
     {
         $rest = $this->read('src/WordPress/RestController.php');

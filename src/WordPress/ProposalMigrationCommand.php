@@ -123,6 +123,10 @@ final class ProposalMigrationCommand
             if (! is_array($proposal) || ! is_int($proposal['source_id'] ?? null) || ($proposal['source_id'] ?? 0) < 1 || ! is_string($proposal['title'] ?? null) || ! is_string($proposal['content'] ?? null) || ! is_array($proposal['settings'] ?? null)) {
                 throw new \InvalidArgumentException('Invalid proposal record.');
             }
+            $shareCode = $proposal['settings']['share_code'] ?? '';
+            if (! is_string($shareCode) || ($shareCode !== '' && preg_match('/^[a-hj-km-np-z2-9]{8}$/i', $shareCode) !== 1)) {
+                throw new \InvalidArgumentException('Invalid proposal share code.');
+            }
         }
         /** @var list<array<string, mixed>> $proposals */
         return array_values($proposals);
@@ -165,7 +169,11 @@ final class ProposalMigrationCommand
         $postId = (int) $written;
         update_post_meta($postId, self::SOURCE_META_KEY, $sourceId);
 
-        $this->repository->saveSettings($postId, $this->safeSettings($proposal['settings']), $passwordHash);
+        $settings = $this->safeSettings($proposal['settings']);
+        $this->repository->saveSettings($postId, $settings, $passwordHash);
+        if ($settings['share_code'] !== '') {
+            $this->repository->restoreShareCode($postId, (string) $settings['share_code']);
+        }
         $published = wp_update_post(['ID' => $postId, 'post_status' => 'publish'], true);
         if (is_wp_error($published)) {
             throw new \RuntimeException($published->get_error_message());
@@ -191,7 +199,7 @@ final class ProposalMigrationCommand
     private function safeSettings(array $settings): array
     {
         $safe = [];
-        foreach (['client_name', 'client_email', 'client_phone', 'client_company', 'copy_email', 'expires_at', 'locale', 'currency', 'otp_policy'] as $key) {
+        foreach (['client_name', 'client_email', 'client_phone', 'client_company', 'copy_email', 'expires_at', 'locale', 'currency', 'otp_policy', 'share_code'] as $key) {
             $safe[$key] = is_scalar($settings[$key] ?? null) ? (string) $settings[$key] : '';
         }
         $safe['invoice_items'] = is_array($settings['invoice_items'] ?? null) ? $settings['invoice_items'] : [];
